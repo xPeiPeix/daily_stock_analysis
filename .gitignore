@@ -73,3 +73,4 @@ verify_*.py
 # ignore claude files
 .claude/
 CLAUDE.md
+.ace-tool/
