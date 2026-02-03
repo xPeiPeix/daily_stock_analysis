@@ -26,6 +26,7 @@ from src.notification import NotificationService, NotificationChannel
 from src.search_service import SearchService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
+from src.limit_analysis import analyze_limits, LimitAnalysisResult
 from bot.models import BotMessage
 
 
@@ -272,12 +273,28 @@ class StockAnalysisPipeline:
                     'yesterday': {}
                 }
             
-            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
+            # Step 5.5: 涨跌停分析（历史统计 + 开板参考）
+            limit_analysis: Optional[LimitAnalysisResult] = None
+            try:
+                history = self.db.get_latest_data(code, days=60)
+                if history:
+                    history_rows = [item.to_dict() for item in reversed(history)]
+                    limit_analysis = analyze_limits(
+                        code=code,
+                        name=stock_name,
+                        daily_records=history_rows,
+                        turnover_rate=getattr(realtime_quote, "turnover_rate", None),
+                    )
+            except Exception as e:
+                logger.warning(f"[{code}] 涨跌停分析失败: {e}")
+
+            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称、涨跌停分析）
             enhanced_context = self._enhance_context(
                 context, 
                 realtime_quote, 
                 chip_data, 
                 trend_result,
+                limit_analysis,
                 stock_name  # 传入股票名称
             )
             
@@ -317,6 +334,7 @@ class StockAnalysisPipeline:
         realtime_quote,
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
+        limit_analysis: Optional[LimitAnalysisResult],
         stock_name: str = ""
     ) -> Dict[str, Any]:
         """
@@ -388,6 +406,10 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
+
+        # 添加涨跌停分析结果
+        if limit_analysis:
+            enhanced['limit_analysis'] = limit_analysis.to_dict()
         
         return enhanced
     

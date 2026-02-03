@@ -167,6 +167,7 @@ class AnalysisResult:
     
     # ========== 决策仪表盘 (新增) ==========
     dashboard: Optional[Dict[str, Any]] = None  # 完整的决策仪表盘数据
+    limit_analysis: Optional[Dict[str, Any]] = None  # 涨跌停分析结果
     
     # ========== 走势分析 ==========
     trend_analysis: str = ""  # 走势形态分析（支撑位、压力位、趋势线等）
@@ -213,6 +214,7 @@ class AnalysisResult:
             'decision_type': self.decision_type,
             'confidence_level': self.confidence_level,
             'dashboard': self.dashboard,  # 决策仪表盘数据
+            'limit_analysis': self.limit_analysis,
             'trend_analysis': self.trend_analysis,
             'short_term_outlook': self.short_term_outlook,
             'medium_term_outlook': self.medium_term_outlook,
@@ -424,6 +426,23 @@ class GeminiAnalyzer:
                 "✅/⚠️/❌ 检查项4：无重大利空",
                 "✅/⚠️/❌ 检查项5：筹码健康"
             ]
+        }
+    },
+
+    "limit_analysis": {
+        "limit_rule": "限幅规则（如：主板10%/创业板20%/ST5%）",
+        "today_status": "涨停封板/跌停封板/炸板/触及涨停/触及跌停/非涨跌停",
+        "streak": {
+            "current_up_days": 当前连板天数,
+            "current_down_days": 当前连跌停天数,
+            "max_up_streak": 近期最长连板天数,
+            "max_down_streak": 近期最长连跌停天数,
+            "break_up_count": 近期炸板次数
+        },
+        "open_board_signal": {
+            "level": "高/中/低",
+            "score": 0-100整数,
+            "reasons": ["原因1", "原因2"]
         }
     },
 
@@ -1033,6 +1052,32 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
+
+        # 添加涨跌停分析结果
+        if 'limit_analysis' in context:
+            limit_info = context['limit_analysis'] or {}
+            rule = limit_info.get('rule', {})
+            latest = limit_info.get('latest', {})
+            streak = limit_info.get('streak', {})
+            open_board = limit_info.get('open_board_signal', {})
+            limit_pct = rule.get('limit_up_pct')
+            if isinstance(limit_pct, (int, float)):
+                limit_pct_display = f"{limit_pct * 100:.0f}%"
+            else:
+                limit_pct_display = "N/A"
+            prompt += f"""
+### 涨跌停分析（简化规则）
+| 指标 | 数值 |
+|------|------|
+| 限幅规则 | {rule.get('board', '未知')} {limit_pct_display} |
+| 今日状态 | {latest.get('status', 'N/A')} |
+| 涨停价/跌停价 | {latest.get('limit_up_price', 'N/A')} / {latest.get('limit_down_price', 'N/A')} |
+| 连板/连跌停 | {streak.get('up_days', 0)} / {streak.get('down_days', 0)} |
+| 近期最长连板 | {streak.get('max_up_streak', 0)} |
+| 近期炸板次数 | {streak.get('break_up_count', 0)} |
+| 开板风险 | {open_board.get('level', 'N/A')} (评分 {open_board.get('score', 'N/A')}) |
+| 开板原因 | {", ".join(open_board.get('reasons', [])) if open_board.get('reasons') else "N/A"} |
+"""
         
         # 添加昨日对比数据
         if 'yesterday' in context:
@@ -1091,6 +1136,7 @@ class GeminiAnalyzer:
 3. ❓ 量能是否配合（缩量回调/放量突破）？
 4. ❓ 筹码结构是否健康？
 5. ❓ 消息面有无重大利空？（减持、处罚、业绩变脸等）
+6. ❓ 涨跌停状态、连板强度与开板风险如何？
 
 ### 决策仪表盘要求：
 - **股票名称**：必须输出正确的中文全称（如"贵州茅台"而非"股票600519"）
@@ -1157,8 +1203,9 @@ class GeminiAnalyzer:
                 
                 data = json.loads(json_str)
                 
-                # 提取 dashboard 数据
+                # 提取 dashboard / limit_analysis 数据
                 dashboard = data.get('dashboard', None)
+                limit_analysis = data.get('limit_analysis', None)
 
                 # 优先使用 AI 返回的股票名称（如果原名称无效或包含代码）
                 ai_stock_name = data.get('stock_name')
@@ -1188,6 +1235,7 @@ class GeminiAnalyzer:
                     confidence_level=data.get('confidence_level', '中'),
                     # 决策仪表盘
                     dashboard=dashboard,
+                    limit_analysis=limit_analysis,
                     # 走势分析
                     trend_analysis=data.get('trend_analysis', ''),
                     short_term_outlook=data.get('short_term_outlook', ''),
