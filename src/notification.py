@@ -1670,30 +1670,93 @@ class NotificationService:
 
         return _post_payload(text_payload)
 
-    def send_to_email(self, content: str, subject: Optional[str] = None) -> bool:
+    def _generate_email_subject(self, results: List[AnalysisResult]) -> str:
+        """
+        根据分析结果生成智能邮件标题
+
+        标题策略：
+        1. 全线看涨：突出买入机会
+        2. 全线看跌：突出风险预警
+        3. 混合信号：突出最高分股票
+        4. 单只股票：直接显示该股票信息
+
+        Args:
+            results: 分析结果列表
+
+        Returns:
+            智能生成的邮件标题
+        """
+        date_str = datetime.now().strftime('%m/%d')
+
+        if not results:
+            return f"📈 {date_str} 股票分析报告"
+
+        # 统计信号
+        buy_count = sum(1 for r in results if getattr(r, 'decision_type', '') == 'buy')
+        sell_count = sum(1 for r in results if getattr(r, 'decision_type', '') == 'sell')
+        total = len(results)
+
+        # 找出最高分和最低分股票
+        sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
+        top = sorted_results[0]
+        bottom = sorted_results[-1] if len(sorted_results) > 1 else None
+
+        # 单只股票
+        if total == 1:
+            emoji = "🟢" if top.sentiment_score >= 60 else "🔴" if top.sentiment_score < 40 else "🟡"
+            return f"{emoji} {date_str}｜{top.name}｜评分{top.sentiment_score}｜{top.operation_advice[:10]}"
+
+        # 全线看涨（买入信号 >= 2/3）
+        if buy_count >= total * 2 / 3:
+            return f"🔥 {date_str}｜{total}只全线看涨｜{buy_count}只买入信号｜最高分：{top.name}{top.sentiment_score}分"
+
+        # 全线看跌（卖出信号 >= 2/3）
+        if sell_count >= total * 2 / 3:
+            return f"⚠️ {date_str}｜{total}只普遍偏空｜{sell_count}只建议减仓｜关注：{bottom.name}风险"
+
+        # 混合信号（默认）
+        signal_summary = f"🟢{buy_count}" if buy_count else ""
+        if sell_count:
+            signal_summary += f" 🔴{sell_count}" if signal_summary else f"🔴{sell_count}"
+        hold_count = total - buy_count - sell_count
+        if hold_count:
+            signal_summary += f" 🟡{hold_count}" if signal_summary else f"🟡{hold_count}"
+
+        return f"📊 {date_str}｜{total}只分析｜{signal_summary}｜重点：{top.name}({top.sentiment_score}分)"
+
+    def send_to_email(
+        self,
+        content: str,
+        subject: Optional[str] = None,
+        results: Optional[List[AnalysisResult]] = None
+    ) -> bool:
         """
         通过 SMTP 发送邮件（自动识别 SMTP 服务器）
-        
+
         Args:
             content: 邮件内容（支持 Markdown，会转换为 HTML）
-            subject: 邮件主题（可选，默认自动生成）
-            
+            subject: 邮件主题（可选，默认根据 results 智能生成）
+            results: 分析结果列表（用于智能生成标题）
+
         Returns:
             是否发送成功
         """
         if not self._is_email_configured():
             logger.warning("邮件配置不完整，跳过推送")
             return False
-        
+
         sender = self._email_config['sender']
         password = self._email_config['password']
         receivers = self._email_config['receivers']
-        
+
         try:
-            # 生成主题
+            # 生成主题：优先使用传入的 subject，否则智能生成
             if subject is None:
-                date_str = datetime.now().strftime('%Y-%m-%d')
-                subject = f"📈 股票智能分析报告 - {date_str}"
+                if results:
+                    subject = self._generate_email_subject(results)
+                else:
+                    date_str = datetime.now().strftime('%Y-%m-%d')
+                    subject = f"📈 股票智能分析报告 - {date_str}"
             
             # 将 Markdown 转换为简单 HTML
             html_content = self._markdown_to_html(content)
@@ -2835,15 +2898,16 @@ class NotificationService:
             logger.error(f"AstrBot 发送异常: {e}")
             return False
     
-    def send(self, content: str) -> bool:
+    def send(self, content: str, email_subject: Optional[str] = None) -> bool:
         """
         统一发送接口 - 向所有已配置的渠道发送
-        
+
         遍历所有已配置的渠道，逐一发送消息
-        
+
         Args:
             content: 消息内容（Markdown 格式）
-            
+            email_subject: 邮件标题（可选，仅用于邮件渠道）
+
         Returns:
             是否至少有一个渠道发送成功
         """
@@ -2855,13 +2919,13 @@ class NotificationService:
                 return True
             logger.warning("通知服务不可用，跳过推送")
             return False
-        
+
         channel_names = self.get_channel_names()
         logger.info(f"正在向 {len(self._available_channels)} 个渠道发送通知：{channel_names}")
-        
+
         success_count = 0
         fail_count = 0
-        
+
         for channel in self._available_channels:
             channel_name = ChannelDetector.get_channel_name(channel)
             try:
@@ -2872,7 +2936,7 @@ class NotificationService:
                 elif channel == NotificationChannel.TELEGRAM:
                     result = self.send_to_telegram(content)
                 elif channel == NotificationChannel.EMAIL:
-                    result = self.send_to_email(content)
+                    result = self.send_to_email(content, subject=email_subject)
                 elif channel == NotificationChannel.PUSHOVER:
                     result = self.send_to_pushover(content)
                 elif channel == NotificationChannel.PUSHPLUS:
@@ -2886,16 +2950,16 @@ class NotificationService:
                 else:
                     logger.warning(f"不支持的通知渠道: {channel}")
                     result = False
-                
+
                 if result:
                     success_count += 1
                 else:
                     fail_count += 1
-                    
+
             except Exception as e:
                 logger.error(f"{channel_name} 发送失败: {e}")
                 fail_count += 1
-        
+
         logger.info(f"通知发送完成：成功 {success_count} 个，失败 {fail_count} 个")
         return success_count > 0 or context_success
     
