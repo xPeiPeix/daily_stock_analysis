@@ -25,10 +25,21 @@ import os
 from src.config import setup_env
 setup_env()
 
+# 国内金融数据源免代理 - 无论是否启用代理都生效
+# 防止系统代理（Clash/V2Ray 等）拦截国内行情接口导致超时
+_domestic_domains = (
+    'eastmoney.com,sina.com.cn,163.com,tushare.pro,'
+    'baostock.com,sse.com.cn,szse.cn,csindex.com.cn,'
+    'cninfo.com.cn,localhost,127.0.0.1'
+)
+_cur_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
+_merged = set(filter(None, _cur_no_proxy.split(',') + _domestic_domains.split(',')))
+os.environ['NO_PROXY'] = ','.join(_merged)
+os.environ['no_proxy'] = os.environ['NO_PROXY']
+
 # 代理配置 - 通过 USE_PROXY 环境变量控制，默认关闭
 # GitHub Actions 环境自动跳过代理配置
 if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").lower() == "true":
-    # 本地开发环境，启用代理（可在 .env 中配置 PROXY_HOST 和 PROXY_PORT）
     proxy_host = os.getenv("PROXY_HOST", "127.0.0.1")
     proxy_port = os.getenv("PROXY_PORT", "10809")
     proxy_url = f"http://{proxy_host}:{proxy_port}"
