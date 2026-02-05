@@ -671,18 +671,44 @@ class GeminiAnalyzer:
     def _call_openai_api(self, prompt: str, generation_config: dict) -> str:
         """
         调用 OpenAI 兼容 API
-        
+
+        使用 httpx 直接调用，避免某些第三方 API 服务检测 OpenAI SDK 的 User-Agent
+
         Args:
             prompt: 提示词
             generation_config: 生成配置
-            
+
         Returns:
             响应文本
         """
+        import httpx
+
         config = get_config()
         max_retries = config.gemini_max_retries
         base_delay = config.gemini_retry_delay
-        
+
+        # 构建请求 URL
+        base_url = config.openai_base_url or "https://api.openai.com/v1"
+        url = f"{base_url.rstrip('/')}/chat/completions"
+
+        # 构建请求头（使用普通浏览器 User-Agent，避免被检测）
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.openai_api_key}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+
+        # 构建请求体
+        payload = {
+            "model": self._current_model_name,
+            "messages": [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": generation_config.get('temperature', config.openai_temperature),
+            "max_tokens": generation_config.get('max_output_tokens', 8192),
+        }
+
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
@@ -690,35 +716,37 @@ class GeminiAnalyzer:
                     delay = min(delay, 60)
                     logger.info(f"[OpenAI] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
                     time.sleep(delay)
-                
-                config = get_config()
-                response = self._openai_client.chat.completions.create(
-                    model=self._current_model_name,
-                    messages=[
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=generation_config.get('temperature', config.openai_temperature),
-                    max_tokens=generation_config.get('max_output_tokens', 8192),
-                )
-                
-                if response and response.choices and response.choices[0].message.content:
-                    return response.choices[0].message.content
-                else:
-                    raise ValueError("OpenAI API 返回空响应")
-                    
+
+                # 使用 httpx 直接发送请求
+                with httpx.Client(timeout=120) as client:
+                    response = client.post(url, headers=headers, json=payload)
+
+                # 检查 HTTP 状态码
+                if response.status_code != 200:
+                    error_msg = response.text[:200] if response.text else f"HTTP {response.status_code}"
+                    raise Exception(f"API 返回错误: {error_msg}")
+
+                # 解析响应
+                data = response.json()
+                if data and "choices" in data and data["choices"]:
+                    content = data["choices"][0].get("message", {}).get("content")
+                    if content:
+                        return content
+
+                raise ValueError("OpenAI API 返回空响应")
+
             except Exception as e:
                 error_str = str(e)
                 is_rate_limit = '429' in error_str or 'rate' in error_str.lower() or 'quota' in error_str.lower()
-                
+
                 if is_rate_limit:
                     logger.warning(f"[OpenAI] API 限流，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
                 else:
                     logger.warning(f"[OpenAI] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-                
+
                 if attempt == max_retries - 1:
                     raise
-        
+
         raise Exception("OpenAI API 调用失败，已达最大重试次数")
     
     def _call_api_with_retry(self, prompt: str, generation_config: dict) -> str:
