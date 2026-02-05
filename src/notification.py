@@ -736,7 +736,45 @@ class NotificationService:
                     ])
             
             # 舆情情报已移至顶部显示
-            
+
+            # ========== 涨跌停分析 ==========
+            limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
+            if limit_data:
+                today_status = limit_data.get('today_status', '非涨跌停')
+                lmt_streak = limit_data.get('streak', {})
+                open_board = limit_data.get('open_board_signal', {})
+                has_activity = (
+                    today_status != '非涨跌停'
+                    or lmt_streak.get('current_up_days', 0) > 0
+                    or lmt_streak.get('current_down_days', 0) > 0
+                    or lmt_streak.get('max_up_streak', 0) > 0
+                    or lmt_streak.get('break_up_count', 0) > 0
+                )
+                if has_activity:
+                    report_lines.extend([
+                        "### 🔒 涨跌停分析",
+                        "",
+                        f"**限幅规则**: {limit_data.get('limit_rule', 'N/A')} | **今日状态**: {today_status}",
+                        "",
+                    ])
+                    if lmt_streak:
+                        report_lines.extend([
+                            "| 指标 | 数值 |",
+                            "|------|------|",
+                            f"| 当前连板 | {lmt_streak.get('current_up_days', 0)} 天 |",
+                            f"| 当前连跌停 | {lmt_streak.get('current_down_days', 0)} 天 |",
+                            f"| 近期最长连板 | {lmt_streak.get('max_up_streak', 0)} 天 |",
+                            f"| 近期炸板次数 | {lmt_streak.get('break_up_count', 0)} |",
+                            "",
+                        ])
+                    if open_board and open_board.get('level'):
+                        ob_level = open_board['level']
+                        ob_emoji = "🚨" if ob_level == "高" else ("⚠️" if ob_level == "中" else "✅")
+                        report_lines.append(f"**开板风险**: {ob_emoji} {ob_level} (评分 {open_board.get('score', 'N/A')}/100)")
+                        for reason in open_board.get('reasons', []):
+                            report_lines.append(f"- {reason}")
+                        report_lines.append("")
+
             # ========== 作战计划 ==========
             battle = dashboard.get('battle_plan', {}) if dashboard else {}
             if battle:
@@ -913,7 +951,25 @@ class NotificationService:
                     cat_text = cat[:50] + "..." if len(cat) > 50 else cat
                     lines.append(f"   • {cat_text}")
                 lines.append("")
-            
+
+            # 涨跌停状态（仅在有涨跌停活动时显示）
+            limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
+            if limit_data and limit_data.get('today_status', '非涨跌停') != '非涨跌停':
+                status = limit_data.get('today_status', '')
+                lmt_streak = limit_data.get('streak', {})
+                open_board = limit_data.get('open_board_signal', {})
+                parts = [f"🔒 {status}"]
+                up_days = lmt_streak.get('current_up_days', 0)
+                if up_days > 0:
+                    parts.append(f"连板{up_days}天")
+                down_days = lmt_streak.get('current_down_days', 0)
+                if down_days > 0:
+                    parts.append(f"连跌停{down_days}天")
+                if open_board.get('level'):
+                    parts.append(f"开板风险:{open_board['level']}")
+                lines.append(" | ".join(parts))
+                lines.append("")
+
             # 狙击点位
             sniper = battle.get('sniper_points', {}) if battle else {}
             if sniper:
@@ -1107,7 +1163,29 @@ class NotificationService:
         
         if info_added:
             lines.append("")
-        
+
+        # 涨跌停分析（仅在有涨跌停活动时显示）
+        limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
+        if limit_data and limit_data.get('today_status', '非涨跌停') != '非涨跌停':
+            lines.extend([
+                "### 🔒 涨跌停",
+                "",
+            ])
+            status = limit_data.get('today_status', 'N/A')
+            lmt_streak = limit_data.get('streak', {})
+            open_board = limit_data.get('open_board_signal', {})
+            lines.append(f"**{status}**")
+            up_days = lmt_streak.get('current_up_days', 0)
+            if up_days > 0:
+                lines.append(f"- 连板: {up_days}天 | 最长: {lmt_streak.get('max_up_streak', 0)}天 | 炸板: {lmt_streak.get('break_up_count', 0)}次")
+            down_days = lmt_streak.get('current_down_days', 0)
+            if down_days > 0:
+                lines.append(f"- 连跌停: {down_days}天 | 最长: {lmt_streak.get('max_down_streak', 0)}天")
+            if open_board.get('level'):
+                ob_emoji = "🚨" if open_board['level'] == "高" else ("⚠️" if open_board['level'] == "中" else "✅")
+                lines.append(f"- 开板风险: {ob_emoji} {open_board['level']} ({open_board.get('score', 'N/A')}/100)")
+            lines.append("")
+
         # 狙击点位
         sniper = battle.get('sniper_points', {}) if battle else {}
         if sniper:
