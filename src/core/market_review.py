@@ -86,7 +86,7 @@ def _generate_market_email_subject(overview: MarketOverview) -> str:
 
     # 构建标题
     index_info = f"{sh_index.name}{change_pct:+.2f}%" if sh_index else ""
-    market_info = f"涨{up_count}/跌{down_count}"
+    market_info = f"涨{up_count}/跌{down_count}" if (up_count + down_count) > 0 else ""
 
     # 亮点信息
     highlight = ""
@@ -99,7 +99,10 @@ def _generate_market_email_subject(overview: MarketOverview) -> str:
     elif amount >= 10000:
         highlight = f"｜成交破万亿"
 
-    return f"{emoji} {date_str}｜{mood}｜{index_info}｜{market_info}{highlight}"
+    # 组装标题，过滤空值
+    parts = [f"{emoji} {date_str}", mood, index_info, market_info]
+    parts = [p for p in parts if p]
+    return "｜".join(parts) + highlight
 
 
 def run_market_review(
