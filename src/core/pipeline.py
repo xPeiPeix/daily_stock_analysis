@@ -80,6 +80,7 @@ class StockAnalysisPipeline:
         self.search_service = SearchService(
             bocha_keys=self.config.bocha_api_keys,
             tavily_keys=self.config.tavily_api_keys,
+            brave_keys=self.config.brave_api_keys,
             serpapi_keys=self.config.serpapi_keys,
         )
         
@@ -305,6 +306,12 @@ class StockAnalysisPipeline:
             if result and limit_analysis:
                 result.limit_analysis = limit_analysis.to_dict()
 
+            # Step 7.6: 填充分析时的价格信息到 result
+            if result:
+                realtime_data = enhanced_context.get('realtime', {})
+                result.current_price = realtime_data.get('price')
+                result.change_pct = realtime_data.get('change_pct')
+
             # Step 8: 保存分析历史记录
             if result:
                 try:
@@ -371,6 +378,7 @@ class StockAnalysisPipeline:
             enhanced['realtime'] = {
                 'name': getattr(realtime_quote, 'name', ''),
                 'price': getattr(realtime_quote, 'price', None),
+                'change_pct': getattr(realtime_quote, 'change_pct', None),
                 'volume_ratio': volume_ratio,
                 'volume_ratio_desc': self._describe_volume_ratio(volume_ratio) if volume_ratio else '无数据',
                 'turnover_rate': getattr(realtime_quote, 'turnover_rate', None),
@@ -761,6 +769,8 @@ class StockAnalysisPipeline:
                         non_wechat_success = self.notifier.send_to_custom(report) or non_wechat_success
                     elif channel == NotificationChannel.PUSHPLUS:
                         non_wechat_success = self.notifier.send_to_pushplus(report) or non_wechat_success
+                    elif channel == NotificationChannel.SERVERCHAN3:
+                        non_wechat_success = self.notifier.send_to_serverchan3(report) or non_wechat_success
                     elif channel == NotificationChannel.DISCORD:
                         non_wechat_success = self.notifier.send_to_discord(report) or non_wechat_success
                     elif channel == NotificationChannel.PUSHOVER:
