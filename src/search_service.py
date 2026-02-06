@@ -290,7 +290,7 @@ class TavilySearchProvider(BaseSearchProvider):
             parsed = urlparse(url)
             domain = parsed.netloc.replace('www.', '')
             return domain or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 
@@ -498,16 +498,187 @@ class SerpAPISearchProvider(BaseSearchProvider):
             return '未知来源'
 
 
+class DuckDuckGoSearchProvider(BaseSearchProvider):
+    """
+    DuckDuckGo 搜索引擎
+
+    特点：
+    - 完全免费，无需 API Key
+    - 无请求次数限制
+    - 支持中文搜索
+    - 隐私友好
+
+    依赖：pip install duckduckgo-search
+    """
+
+    def __init__(self):
+        # DuckDuckGo 不需要 API Key，传入空列表
+        super().__init__(["duckduckgo"], "DuckDuckGo")
+
+    @property
+    def is_available(self) -> bool:
+        """DuckDuckGo 始终可用（无需 API Key）"""
+        return True
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        """执行 DuckDuckGo 搜索"""
+        try:
+            from ddgs import DDGS
+        except ImportError:
+            return SearchResponse(
+                query=query,
+                results=[],
+                provider=self.name,
+                success=False,
+                error_message="ddgs 未安装，请运行: uv pip install ddgs"
+            )
+
+        import warnings
+        warnings.filterwarnings("ignore", message=".*renamed to.*ddgs.*")
+
+        # 确定时间范围
+        # DuckDuckGo 支持: d (day), w (week), m (month), y (year)
+        timelimit = "w"  # 默认一周
+        if days <= 1:
+            timelimit = "d"
+        elif days <= 7:
+            timelimit = "w"
+        elif days <= 30:
+            timelimit = "m"
+        else:
+            timelimit = "y"
+
+        results = []
+        search_results = []
+
+        # 使用 DDGS 进行搜索，添加重试逻辑
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                with DDGS() as ddgs:
+                    # 搜索新闻
+                    search_results = list(ddgs.news(
+                        keywords=query,
+                        region="cn-zh",  # 中国区域，中文
+                        safesearch="moderate",
+                        timelimit=timelimit,
+                        max_results=max_results
+                    ))
+                if search_results:
+                    break
+            except Exception as e:
+                error_str = str(e).lower()
+                if 'ratelimit' in error_str or '202' in error_str:
+                    wait_time = 3 * (attempt + 1)  # 3, 6, 9 秒
+                    logger.warning(f"[DuckDuckGo] 速率限制，等待 {wait_time}s 后重试 ({attempt + 1}/{max_attempts})")
+                    time.sleep(wait_time)
+                    continue
+                # 其他错误直接返回失败，让系统切换到下一个搜索引擎
+                logger.error(f"[DuckDuckGo] 搜索异常: {e}")
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=False,
+                    error_message=str(e)
+                )
+
+        if search_results:
+            logger.info(f"[DuckDuckGo] 新闻搜索完成，返回 {len(search_results)} 条结果")
+
+            for item in search_results:
+                results.append(SearchResult(
+                    title=item.get('title', ''),
+                    snippet=item.get('body', '')[:500],
+                    url=item.get('url', ''),
+                    source=item.get('source', self._extract_domain(item.get('url', ''))),
+                    published_date=item.get('date'),
+                ))
+
+            return SearchResponse(
+                query=query,
+                results=results,
+                provider=self.name,
+                success=True,
+            )
+
+        # 如果新闻搜索无结果，尝试普通文本搜索
+        logger.debug(f"[DuckDuckGo] 新闻搜索无结果，尝试文本搜索")
+        for attempt in range(max_attempts):
+            try:
+                with DDGS() as ddgs:
+                    search_results = list(ddgs.text(
+                        keywords=query,
+                        region="cn-zh",
+                        safesearch="moderate",
+                        timelimit=timelimit,
+                        max_results=max_results
+                    ))
+                if search_results:
+                    break
+            except Exception as e:
+                error_str = str(e).lower()
+                if 'ratelimit' in error_str or '202' in error_str:
+                    wait_time = 3 * (attempt + 1)
+                    logger.warning(f"[DuckDuckGo] 速率限制，等待 {wait_time}s 后重试 ({attempt + 1}/{max_attempts})")
+                    time.sleep(wait_time)
+                    continue
+                return SearchResponse(
+                    query=query,
+                    results=[],
+                    provider=self.name,
+                    success=False,
+                    error_message=str(e)
+                )
+
+        if search_results:
+            logger.info(f"[DuckDuckGo] 文本搜索成功，返回 {len(search_results)} 条结果")
+            for item in search_results:
+                results.append(SearchResult(
+                    title=item.get('title', ''),
+                    snippet=item.get('body', '')[:500],
+                    url=item.get('href', ''),
+                    source=self._extract_domain(item.get('href', '')),
+                ))
+
+            return SearchResponse(
+                query=query,
+                results=results,
+                provider=self.name,
+                success=True,
+            )
+
+        # 所有尝试都失败，返回失败让系统切换到下一个搜索引擎
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider=self.name,
+            success=False,
+            error_message="DuckDuckGo 速率限制，请稍后重试"
+        )
+
+    @staticmethod
+    def _extract_domain(url: str) -> str:
+        """从 URL 提取域名作为来源"""
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            domain = parsed.netloc.replace('www.', '')
+            return domain or '未知来源'
+        except Exception:
+            return '未知来源'
+
+
 class BochaSearchProvider(BaseSearchProvider):
     """
     博查搜索引擎
-    
+
     特点：
     - 专为AI优化的中文搜索API
     - 结果准确、摘要完整
     - 支持时间范围过滤和AI摘要
     - 兼容Bing Search API格式
-    
+
     文档：https://bocha-ai.feishu.cn/wiki/RXEOw02rFiwzGSkd9mUcqoeAnNK
     """
     
@@ -691,7 +862,7 @@ class BochaSearchProvider(BaseSearchProvider):
             parsed = urlparse(url)
             domain = parsed.netloc.replace('www.', '')
             return domain or '未知来源'
-        except:
+        except Exception:
             return '未知来源'
 
 
@@ -720,35 +891,42 @@ class SearchService:
         bocha_keys: Optional[List[str]] = None,
         tavily_keys: Optional[List[str]] = None,
         serpapi_keys: Optional[List[str]] = None,
+        enable_duckduckgo: bool = True,
     ):
         """
         初始化搜索服务
-        
+
         Args:
             bocha_keys: 博查搜索 API Key 列表
             tavily_keys: Tavily API Key 列表
             serpapi_keys: SerpAPI Key 列表
+            enable_duckduckgo: 是否启用 DuckDuckGo（免费，无需 API Key）
         """
         self._providers: List[BaseSearchProvider] = []
-        
+
         # 初始化搜索引擎（按优先级排序）
-        # 1. Bocha 优先（中文搜索优化，AI摘要）
+        # 1. Bocha（中文搜索优化，AI摘要）
         if bocha_keys:
             self._providers.append(BochaSearchProvider(bocha_keys))
             logger.info(f"已配置 Bocha 搜索，共 {len(bocha_keys)} 个 API Key")
-        
+
         # 2. Tavily（免费额度更多，每月 1000 次）
         if tavily_keys:
             self._providers.append(TavilySearchProvider(tavily_keys))
             logger.info(f"已配置 Tavily 搜索，共 {len(tavily_keys)} 个 API Key")
-        
+
         # 3. SerpAPI 作为备选（每月 100 次）
         if serpapi_keys:
             self._providers.append(SerpAPISearchProvider(serpapi_keys))
             logger.info(f"已配置 SerpAPI 搜索，共 {len(serpapi_keys)} 个 API Key")
-        
+
+        # 4. DuckDuckGo 作为最后备选（免费但有速率限制）
+        if enable_duckduckgo:
+            self._providers.append(DuckDuckGoSearchProvider())
+            logger.info("已启用 DuckDuckGo 搜索（免费备选，有速率限制）")
+
         if not self._providers:
-            logger.warning("未配置任何搜索引擎 API Key，新闻搜索功能将不可用")
+            logger.warning("未配置任何搜索引擎，新闻搜索功能将不可用")
     
     @property
     def is_available(self) -> bool:
@@ -1209,17 +1387,18 @@ _search_service: Optional[SearchService] = None
 def get_search_service() -> SearchService:
     """获取搜索服务单例"""
     global _search_service
-    
+
     if _search_service is None:
         from src.config import get_config
         config = get_config()
-        
+
         _search_service = SearchService(
             bocha_keys=config.bocha_api_keys,
             tavily_keys=config.tavily_api_keys,
             serpapi_keys=config.serpapi_keys,
+            enable_duckduckgo=True,  # 默认启用免费的 DuckDuckGo
         )
-    
+
     return _search_service
 
 
