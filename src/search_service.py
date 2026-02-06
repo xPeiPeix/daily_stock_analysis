@@ -556,9 +556,9 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
         for attempt in range(max_attempts):
             try:
                 with DDGS() as ddgs:
-                    # 搜索新闻
+                    # 搜索新闻 (ddgs >= 6.0 使用 query 作为第一个位置参数)
                     search_results = list(ddgs.news(
-                        keywords=query,
+                        query,
                         region="cn-zh",  # 中国区域，中文
                         safesearch="moderate",
                         timelimit=timelimit,
@@ -607,8 +607,9 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
         for attempt in range(max_attempts):
             try:
                 with DDGS() as ddgs:
+                    # ddgs >= 6.0 使用 query 作为第一个位置参数
                     search_results = list(ddgs.text(
-                        keywords=query,
+                        query,
                         region="cn-zh",
                         safesearch="moderate",
                         timelimit=timelimit,
