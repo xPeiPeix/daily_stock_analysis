@@ -740,13 +740,16 @@ class NotificationService:
             # ========== 涨跌停分析 ==========
             limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
             if limit_data:
-                today_status = limit_data.get('today_status', '非涨跌停')
+                latest_record = limit_data.get('latest', {}) or {}
+                today_status = latest_record.get('status', '非涨跌停')
+                rule_info = limit_data.get('rule', {}) or {}
+                limit_rule = rule_info.get('board', 'N/A')
                 lmt_streak = limit_data.get('streak', {})
                 open_board = limit_data.get('open_board_signal', {})
                 has_activity = (
                     today_status != '非涨跌停'
-                    or lmt_streak.get('current_up_days', 0) > 0
-                    or lmt_streak.get('current_down_days', 0) > 0
+                    or lmt_streak.get('up_days', 0) > 0
+                    or lmt_streak.get('down_days', 0) > 0
                     or lmt_streak.get('max_up_streak', 0) > 0
                     or lmt_streak.get('break_up_count', 0) > 0
                 )
@@ -754,23 +757,40 @@ class NotificationService:
                     report_lines.extend([
                         "### 🔒 涨跌停分析",
                         "",
-                        f"**限幅规则**: {limit_data.get('limit_rule', 'N/A')} | **今日状态**: {today_status}",
+                        f"**限幅规则**: {limit_rule} | **今日状态**: {today_status}",
                         "",
                     ])
                     if lmt_streak:
                         report_lines.extend([
                             "| 指标 | 数值 |",
                             "|------|------|",
-                            f"| 当前连板 | {lmt_streak.get('current_up_days', 0)} 天 |",
-                            f"| 当前连跌停 | {lmt_streak.get('current_down_days', 0)} 天 |",
+                            f"| 当前连板 | {lmt_streak.get('up_days', 0)} 天 |",
+                            f"| 当前连跌停 | {lmt_streak.get('down_days', 0)} 天 |",
                             f"| 近期最长连板 | {lmt_streak.get('max_up_streak', 0)} 天 |",
                             f"| 近期炸板次数 | {lmt_streak.get('break_up_count', 0)} |",
                             "",
                         ])
                     if open_board and open_board.get('level'):
                         ob_level = open_board['level']
-                        ob_emoji = "🚨" if ob_level == "高" else ("⚠️" if ob_level == "中" else "✅")
-                        report_lines.append(f"**开板风险**: {ob_emoji} {ob_level} (评分 {open_board.get('score', 'N/A')}/100)")
+                        ob_score = open_board.get('score', 0)
+                        ob_direction = open_board.get('direction', 'none')
+                        if ob_direction == "limit_down":
+                            # 跌停：开板风险高=好事（有机会逃跑），低=坏事（卖不出）
+                            if ob_level == "高":
+                                ob_text = f"✅ 开板概率高 (风险值 {ob_score}/100，有望逃跑)"
+                            elif ob_level == "中":
+                                ob_text = f"⚠️ 开板概率中等 (风险值 {ob_score}/100)"
+                            else:
+                                ob_text = f"🚨 封死概率高 (风险值仅 {ob_score}/100，难以卖出)"
+                        else:
+                            # 涨停或普通：开板风险高=坏事，低=好事
+                            if ob_level == "高":
+                                ob_text = f"🚨 高风险 (风险值 {ob_score}/100)"
+                            elif ob_level == "中":
+                                ob_text = f"⚠️ 中等风险 (风险值 {ob_score}/100)"
+                            else:
+                                ob_text = f"✅ 封板稳定 (风险值仅 {ob_score}/100)"
+                        report_lines.append(f"**开板风险**: {ob_text}")
                         for reason in open_board.get('reasons', []):
                             report_lines.append(f"- {reason}")
                         report_lines.append("")
@@ -954,15 +974,16 @@ class NotificationService:
 
             # 涨跌停状态（仅在有涨跌停活动时显示）
             limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
-            if limit_data and limit_data.get('today_status', '非涨跌停') != '非涨跌停':
-                status = limit_data.get('today_status', '')
+            latest_record = limit_data.get('latest', {}) or {} if limit_data else {}
+            today_status = latest_record.get('status', '非涨跌停') if latest_record else '非涨跌停'
+            if limit_data and today_status != '非涨跌停':
                 lmt_streak = limit_data.get('streak', {})
                 open_board = limit_data.get('open_board_signal', {})
-                parts = [f"🔒 {status}"]
-                up_days = lmt_streak.get('current_up_days', 0)
+                parts = [f"🔒 {today_status}"]
+                up_days = lmt_streak.get('up_days', 0)
                 if up_days > 0:
                     parts.append(f"连板{up_days}天")
-                down_days = lmt_streak.get('current_down_days', 0)
+                down_days = lmt_streak.get('down_days', 0)
                 if down_days > 0:
                     parts.append(f"连跌停{down_days}天")
                 if open_board.get('level'):
@@ -1166,24 +1187,43 @@ class NotificationService:
 
         # 涨跌停分析（仅在有涨跌停活动时显示）
         limit_data = result.limit_analysis if hasattr(result, 'limit_analysis') and result.limit_analysis else {}
-        if limit_data and limit_data.get('today_status', '非涨跌停') != '非涨跌停':
+        latest_record = limit_data.get('latest', {}) or {} if limit_data else {}
+        today_status = latest_record.get('status', '非涨跌停') if latest_record else '非涨跌停'
+        if limit_data and today_status != '非涨跌停':
             lines.extend([
                 "### 🔒 涨跌停",
                 "",
             ])
-            status = limit_data.get('today_status', 'N/A')
             lmt_streak = limit_data.get('streak', {})
             open_board = limit_data.get('open_board_signal', {})
-            lines.append(f"**{status}**")
-            up_days = lmt_streak.get('current_up_days', 0)
+            lines.append(f"**{today_status}**")
+            up_days = lmt_streak.get('up_days', 0)
             if up_days > 0:
                 lines.append(f"- 连板: {up_days}天 | 最长: {lmt_streak.get('max_up_streak', 0)}天 | 炸板: {lmt_streak.get('break_up_count', 0)}次")
-            down_days = lmt_streak.get('current_down_days', 0)
+            down_days = lmt_streak.get('down_days', 0)
             if down_days > 0:
                 lines.append(f"- 连跌停: {down_days}天 | 最长: {lmt_streak.get('max_down_streak', 0)}天")
             if open_board.get('level'):
-                ob_emoji = "🚨" if open_board['level'] == "高" else ("⚠️" if open_board['level'] == "中" else "✅")
-                lines.append(f"- 开板风险: {ob_emoji} {open_board['level']} ({open_board.get('score', 'N/A')}/100)")
+                ob_level = open_board['level']
+                ob_score = open_board.get('score', 0)
+                ob_direction = open_board.get('direction', 'none')
+                if ob_direction == "limit_down":
+                    # 跌停：开板风险高=好事（有机会逃跑），低=坏事（卖不出）
+                    if ob_level == "高":
+                        ob_text = f"✅ 开板概率高 (风险值 {ob_score}/100，有望逃跑)"
+                    elif ob_level == "中":
+                        ob_text = f"⚠️ 开板概率中等 (风险值 {ob_score}/100)"
+                    else:
+                        ob_text = f"🚨 封死概率高 (风险值仅 {ob_score}/100，难以卖出)"
+                else:
+                    # 涨停或普通：开板风险高=坏事，低=好事
+                    if ob_level == "高":
+                        ob_text = f"🚨 高风险 (风险值 {ob_score}/100)"
+                    elif ob_level == "中":
+                        ob_text = f"⚠️ 中等风险 (风险值 {ob_score}/100)"
+                    else:
+                        ob_text = f"✅ 封板稳定 (风险值仅 {ob_score}/100)"
+                lines.append(f"- 开板风险: {ob_text}")
             lines.append("")
 
         # 狙击点位
