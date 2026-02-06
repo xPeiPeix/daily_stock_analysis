@@ -97,6 +97,8 @@ class LimitStreak:
     break_down_count: int      # 近期跌停开板次数
     last_limit_up_date: Optional[str]   # 最近涨停日期
     last_limit_down_date: Optional[str]  # 最近跌停日期
+    limit_up_dates: List[str] = field(default_factory=list)  # 所有涨停日期列表
+    limit_down_dates: List[str] = field(default_factory=list)  # 所有跌停日期列表
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -110,6 +112,8 @@ class LimitStreak:
             "break_down_count": self.break_down_count,
             "last_limit_up_date": self.last_limit_up_date,
             "last_limit_down_date": self.last_limit_down_date,
+            "limit_up_dates": self.limit_up_dates,
+            "limit_down_dates": self.limit_down_dates,
         }
 
 
@@ -342,17 +346,21 @@ def _compute_streak(records: List[DailyLimitRecord]) -> LimitStreak:
             break_down_count=0,
             last_limit_up_date=None,
             last_limit_down_date=None,
+            limit_up_dates=[],
+            limit_down_dates=[],
         )
 
-    # 统计总数
-    limit_up_days = sum(1 for r in records if r.is_limit_up)
-    limit_down_days = sum(1 for r in records if r.is_limit_down)
+    # 统计总数和收集日期
+    limit_up_dates = [r.date for r in records if r.is_limit_up]
+    limit_down_dates = [r.date for r in records if r.is_limit_down]
+    limit_up_days = len(limit_up_dates)
+    limit_down_days = len(limit_down_dates)
     break_up_count = sum(1 for r in records if r.broken_limit_up)
     break_down_count = sum(1 for r in records if r.broken_limit_down)
 
     # 最近涨跌停日期
-    last_limit_up_date = next((r.date for r in reversed(records) if r.is_limit_up), None)
-    last_limit_down_date = next((r.date for r in reversed(records) if r.is_limit_down), None)
+    last_limit_up_date = limit_up_dates[-1] if limit_up_dates else None
+    last_limit_down_date = limit_down_dates[-1] if limit_down_dates else None
 
     # 当前连板天数（从最近一天往前数）
     up_days = 0
@@ -398,6 +406,8 @@ def _compute_streak(records: List[DailyLimitRecord]) -> LimitStreak:
         break_down_count=break_down_count,
         last_limit_up_date=last_limit_up_date,
         last_limit_down_date=last_limit_down_date,
+        limit_up_dates=limit_up_dates,
+        limit_down_dates=limit_down_dates,
     )
 
 

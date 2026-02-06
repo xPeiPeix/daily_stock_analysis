@@ -770,6 +770,18 @@ class NotificationService:
                             f"| 近期炸板次数 | {lmt_streak.get('break_up_count', 0)} |",
                             "",
                         ])
+                        # 显示涨停日期列表（如果有）
+                        limit_up_dates = lmt_streak.get('limit_up_dates', [])
+                        if limit_up_dates:
+                            dates_str = ", ".join(limit_up_dates)
+                            report_lines.append(f"**涨停日期**: {dates_str}")
+                            report_lines.append("")
+                        # 显示跌停日期列表（如果有）
+                        limit_down_dates = lmt_streak.get('limit_down_dates', [])
+                        if limit_down_dates:
+                            dates_str = ", ".join(limit_down_dates)
+                            report_lines.append(f"**跌停日期**: {dates_str}")
+                            report_lines.append("")
                     # 只在封板时显示开板信号（涨停封板或跌停封板）
                     is_sealed = today_status in ('涨停封板', '跌停封板')
                     if is_sealed and open_board and open_board.get('level'):
@@ -1210,6 +1222,16 @@ class NotificationService:
             down_days = lmt_streak.get('down_days', 0)
             if down_days > 0:
                 lines.append(f"- 连跌停: {down_days}天 | 最长: {lmt_streak.get('max_down_streak', 0)}天")
+            # 显示涨停日期列表（如果有）
+            limit_up_dates = lmt_streak.get('limit_up_dates', [])
+            if limit_up_dates:
+                dates_str = ", ".join(limit_up_dates)
+                lines.append(f"- 涨停日期: {dates_str}")
+            # 显示跌停日期列表（如果有）
+            limit_down_dates = lmt_streak.get('limit_down_dates', [])
+            if limit_down_dates:
+                dates_str = ", ".join(limit_down_dates)
+                lines.append(f"- 跌停日期: {dates_str}")
             # 只在封板时显示开板信号
             is_sealed = today_status in ('涨停封板', '跌停封板')
             if is_sealed and open_board.get('level'):
