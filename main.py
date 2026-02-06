@@ -22,27 +22,51 @@ A股自选股智能分析系统 - 主调度程序
 - 买点偏好：缩量回踩 MA5/MA10 支撑
 """
 import os
-from src.config import setup_env
-setup_env()
 
-# 国内金融数据源免代理 - 无论是否启用代理都生效
+# ============================================================
+# 国内金融数据源免代理 - 必须在所有其他导入之前设置
 # 防止系统代理（Clash/V2Ray 等）拦截国内行情接口导致超时
+# ============================================================
+
+# Step 1: 保存原始代理设置（用于后续恢复给需要代理的请求）
+_saved_http_proxy = os.environ.get('http_proxy') or os.environ.get('HTTP_PROXY')
+_saved_https_proxy = os.environ.get('https_proxy') or os.environ.get('HTTPS_PROXY')
+
+# Step 2: 清除系统代理环境变量（防止 Clash/V2Ray 干扰国内接口）
+# 这必须在任何 HTTP 库导入之前执行
+for _proxy_var in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']:
+    os.environ.pop(_proxy_var, None)
+
+# Step 3: 设置 NO_PROXY（作为额外保护层）
 _domestic_domains = (
-    'eastmoney.com,sina.com.cn,163.com,tushare.pro,'
+    'eastmoney.com,push2.eastmoney.com,quote.eastmoney.com,'
+    'datacenter.eastmoney.com,data.eastmoney.com,'
+    'sina.com.cn,hq.sinajs.cn,163.com,tushare.pro,'
     'baostock.com,sse.com.cn,szse.cn,csindex.com.cn,'
-    'cninfo.com.cn,localhost,127.0.0.1'
+    'cninfo.com.cn,gtimg.cn,qt.gtimg.cn,localhost,127.0.0.1'
 )
 _cur_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
 _merged = set(filter(None, _cur_no_proxy.split(',') + _domestic_domains.split(',')))
 os.environ['NO_PROXY'] = ','.join(_merged)
 os.environ['no_proxy'] = os.environ['NO_PROXY']
 
+# Step 4: 导入代理绕过模块（monkey-patch requests 库）
+# 这是最关键的一步，强制国内域名直连，绕过 TUN 模式代理
+import data_provider._proxy_bypass  # noqa: F401
+
+from src.config import setup_env
+setup_env()
+
 # 代理配置 - 通过 USE_PROXY 环境变量控制，默认关闭
 # GitHub Actions 环境自动跳过代理配置
+# 注意：代理仅用于需要翻墙的 API（如 Gemini/OpenAI），国内数据源已在上方清除代理
 if os.getenv("GITHUB_ACTIONS") != "true" and os.getenv("USE_PROXY", "false").lower() == "true":
-    proxy_host = os.getenv("PROXY_HOST", "127.0.0.1")
-    proxy_port = os.getenv("PROXY_PORT", "10809")
-    proxy_url = f"http://{proxy_host}:{proxy_port}"
+    # 优先使用保存的原始代理设置，否则使用配置的代理
+    proxy_url = _saved_https_proxy or _saved_http_proxy
+    if not proxy_url:
+        proxy_host = os.getenv("PROXY_HOST", "127.0.0.1")
+        proxy_port = os.getenv("PROXY_PORT", "10809")
+        proxy_url = f"http://{proxy_host}:{proxy_port}"
     os.environ["http_proxy"] = proxy_url
     os.environ["https_proxy"] = proxy_url
 
