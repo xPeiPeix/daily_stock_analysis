@@ -1103,8 +1103,11 @@ class GeminiAnalyzer:
 | 连板/连跌停 | {streak.get('up_days', 0)} / {streak.get('down_days', 0)} |
 | 近期最长连板 | {streak.get('max_up_streak', 0)} |
 | 近期炸板次数 | {streak.get('break_up_count', 0)} |
-| 开板风险 | {open_board.get('level', 'N/A')} (评分 {open_board.get('score', 'N/A')}) |
+| 开板风险 | {open_board.get('level', 'N/A')} (风险值 {open_board.get('score', 'N/A')}/100) |
+| 开板方向 | {open_board.get('direction', 'none')} |
 | 开板原因 | {", ".join(open_board.get('reasons', [])) if open_board.get('reasons') else "N/A"} |
+
+**开板风险解读**：涨停时风险值越高=越危险（可能炸板）；跌停时风险值越高=越有希望（可能开板逃跑）
 """
         
         # 添加昨日对比数据
