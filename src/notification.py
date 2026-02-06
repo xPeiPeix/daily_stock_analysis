@@ -770,27 +770,31 @@ class NotificationService:
                             f"| 近期炸板次数 | {lmt_streak.get('break_up_count', 0)} |",
                             "",
                         ])
-                    if open_board and open_board.get('level'):
+                    # 只在封板时显示开板信号（涨停封板或跌停封板）
+                    is_sealed = today_status in ('涨停封板', '跌停封板')
+                    if is_sealed and open_board and open_board.get('level'):
                         ob_level = open_board['level']
                         ob_score = open_board.get('score', 0)
                         ob_direction = open_board.get('direction', 'none')
                         if ob_direction == "limit_down":
-                            # 跌停：开板风险高=好事（有机会逃跑），低=坏事（卖不出）
+                            # 跌停封板：开板是机会（可以卖出）
+                            ob_label = "**开板机会**"
                             if ob_level == "高":
-                                ob_text = f"✅ 开板概率高 (风险值 {ob_score}/100，有望逃跑)"
+                                ob_text = f"✅ 开板概率高 ({ob_score}/100，有望卖出)"
                             elif ob_level == "中":
-                                ob_text = f"⚠️ 开板概率中等 (风险值 {ob_score}/100)"
+                                ob_text = f"⚠️ 开板概率中等 ({ob_score}/100)"
                             else:
-                                ob_text = f"🚨 封死概率高 (风险值仅 {ob_score}/100，难以卖出)"
+                                ob_text = f"🚨 封死概率高 (仅 {ob_score}/100，难以卖出)"
                         else:
-                            # 涨停或普通：开板风险高=坏事，低=好事
+                            # 涨停封板：开板是风险（可能卖飞）
+                            ob_label = "**开板风险**"
                             if ob_level == "高":
-                                ob_text = f"🚨 高风险 (风险值 {ob_score}/100)"
+                                ob_text = f"🚨 高风险 ({ob_score}/100)"
                             elif ob_level == "中":
-                                ob_text = f"⚠️ 中等风险 (风险值 {ob_score}/100)"
+                                ob_text = f"⚠️ 中等风险 ({ob_score}/100)"
                             else:
-                                ob_text = f"✅ 封板稳定 (风险值仅 {ob_score}/100)"
-                        report_lines.append(f"**开板风险**: {ob_text}")
+                                ob_text = f"✅ 封板稳定 (仅 {ob_score}/100)"
+                        report_lines.append(f"{ob_label}: {ob_text}")
                         for reason in open_board.get('reasons', []):
                             report_lines.append(f"- {reason}")
                         report_lines.append("")
@@ -986,8 +990,11 @@ class NotificationService:
                 down_days = lmt_streak.get('down_days', 0)
                 if down_days > 0:
                     parts.append(f"连跌停{down_days}天")
-                if open_board.get('level'):
-                    parts.append(f"开板风险:{open_board['level']}")
+                # 只在封板时显示开板信号
+                is_sealed = today_status in ('涨停封板', '跌停封板')
+                if is_sealed and open_board.get('level'):
+                    ob_label = "开板机会" if today_status == '跌停封板' else "开板风险"
+                    parts.append(f"{ob_label}:{open_board['level']}")
                 lines.append(" | ".join(parts))
                 lines.append("")
 
@@ -1203,27 +1210,30 @@ class NotificationService:
             down_days = lmt_streak.get('down_days', 0)
             if down_days > 0:
                 lines.append(f"- 连跌停: {down_days}天 | 最长: {lmt_streak.get('max_down_streak', 0)}天")
-            if open_board.get('level'):
+            # 只在封板时显示开板信号
+            is_sealed = today_status in ('涨停封板', '跌停封板')
+            if is_sealed and open_board.get('level'):
                 ob_level = open_board['level']
                 ob_score = open_board.get('score', 0)
-                ob_direction = open_board.get('direction', 'none')
-                if ob_direction == "limit_down":
-                    # 跌停：开板风险高=好事（有机会逃跑），低=坏事（卖不出）
+                if today_status == '跌停封板':
+                    # 跌停封板：开板是机会（可以卖出）
+                    ob_label = "开板机会"
                     if ob_level == "高":
-                        ob_text = f"✅ 开板概率高 (风险值 {ob_score}/100，有望逃跑)"
+                        ob_text = f"✅ 开板概率高 ({ob_score}/100，有望卖出)"
                     elif ob_level == "中":
-                        ob_text = f"⚠️ 开板概率中等 (风险值 {ob_score}/100)"
+                        ob_text = f"⚠️ 开板概率中等 ({ob_score}/100)"
                     else:
-                        ob_text = f"🚨 封死概率高 (风险值仅 {ob_score}/100，难以卖出)"
+                        ob_text = f"🚨 封死概率高 (仅 {ob_score}/100，难以卖出)"
                 else:
-                    # 涨停或普通：开板风险高=坏事，低=好事
+                    # 涨停封板：开板是风险（可能卖飞）
+                    ob_label = "开板风险"
                     if ob_level == "高":
-                        ob_text = f"🚨 高风险 (风险值 {ob_score}/100)"
+                        ob_text = f"🚨 高风险 ({ob_score}/100)"
                     elif ob_level == "中":
-                        ob_text = f"⚠️ 中等风险 (风险值 {ob_score}/100)"
+                        ob_text = f"⚠️ 中等风险 ({ob_score}/100)"
                     else:
-                        ob_text = f"✅ 封板稳定 (风险值仅 {ob_score}/100)"
-                lines.append(f"- 开板风险: {ob_text}")
+                        ob_text = f"✅ 封板稳定 (仅 {ob_score}/100)"
+                lines.append(f"- {ob_label}: {ob_text}")
             lines.append("")
 
         # 狙击点位
