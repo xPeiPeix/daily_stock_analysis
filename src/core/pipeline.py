@@ -301,6 +301,10 @@ class StockAnalysisPipeline:
             # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
 
+            # Step 7.5: 将计算的涨跌停分析结果直接附加到 result（不依赖大模型返回）
+            if result and limit_analysis:
+                result.limit_analysis = limit_analysis.to_dict()
+
             # Step 8: 保存分析历史记录
             if result:
                 try:
