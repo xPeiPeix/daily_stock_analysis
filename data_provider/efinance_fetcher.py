@@ -22,6 +22,23 @@ EfinanceFetcher - 优先数据源 (Priority 0)
 
 import logging
 import os
+
+# ============================================================
+# 国内金融数据源免代理 - 在导入 efinance 之前设置
+# 防止系统代理（Clash/V2Ray 等）拦截国内行情接口导致连接失败
+# ============================================================
+_DOMESTIC_DOMAINS = (
+    'eastmoney.com,push2.eastmoney.com,quote.eastmoney.com,'
+    'datacenter.eastmoney.com,data.eastmoney.com,'
+    'sina.com.cn,hq.sinajs.cn,163.com,tushare.pro,'
+    'baostock.com,sse.com.cn,szse.cn,csindex.com.cn,'
+    'cninfo.com.cn,gtimg.cn,qt.gtimg.cn,localhost,127.0.0.1'
+)
+_cur_no_proxy = os.getenv('NO_PROXY') or os.getenv('no_proxy') or ''
+_merged = set(filter(None, _cur_no_proxy.split(',') + _DOMESTIC_DOMAINS.split(',')))
+os.environ['NO_PROXY'] = ','.join(_merged)
+os.environ['no_proxy'] = os.environ['NO_PROXY']
+
 import random
 import re
 import time
@@ -115,19 +132,91 @@ _realtime_cache: Dict[str, Any] = {
 def _is_etf_code(stock_code: str) -> bool:
     """
     判断代码是否为 ETF 基金
-    
+
     ETF 代码规则：
     - 上交所 ETF: 51xxxx, 52xxxx, 56xxxx, 58xxxx
-    - 深交所 ETF: 15xxxx, 16xxxx, 18xxxx
-    
+    - 深交所 ETF: 159xxx
+
+    注意：16xxxx 开头的是 LOF 基金，不是 ETF
+
     Args:
         stock_code: 股票/基金代码
-        
+
     Returns:
         True 表示是 ETF 代码，False 表示是普通股票代码
     """
-    etf_prefixes = ('51', '52', '56', '58', '15', '16', '18')
-    return stock_code.startswith(etf_prefixes) and len(stock_code) == 6
+    if len(stock_code) != 6:
+        return False
+
+    # 上交所 ETF
+    sh_etf_prefixes = ('51', '52', '56', '58')
+    if stock_code.startswith(sh_etf_prefixes):
+        return True
+
+    # 深交所 ETF (只有 159 开头)
+    if stock_code.startswith('159'):
+        return True
+
+    return False
+
+
+def _is_other_fund_code(stock_code: str) -> bool:
+    """
+    判断代码是否为其他类型基金（分级基金、封闭式基金等）
+
+    这些基金代码如果被误路由到股票 API 会失败，需要特殊处理。
+
+    代码规则：
+    - 深交所分级基金: 150xxx, 151xxx
+    - 深交所封闭式基金: 184xxx
+    - 上交所封闭式基金: 500xxx
+
+    Args:
+        stock_code: 股票/基金代码
+
+    Returns:
+        True 表示是其他类型基金代码
+    """
+    if len(stock_code) != 6:
+        return False
+
+    # 深交所分级基金
+    if stock_code.startswith(('150', '151')):
+        return True
+
+    # 封闭式基金
+    if stock_code.startswith(('184', '500')):
+        return True
+
+    return False
+
+
+def _is_lof_code(stock_code: str) -> bool:
+    """
+    判断代码是否为 LOF 基金（上市开放式基金）
+
+    LOF 代码规则：
+    - 深交所 LOF: 16xxxx (160xxx-169xxx，但不包括 159xxx)
+    - 上交所 LOF: 501xxx, 502xxx 等
+
+    Args:
+        stock_code: 股票/基金代码
+
+    Returns:
+        True 表示是 LOF 代码，False 表示不是
+    """
+    if len(stock_code) != 6:
+        return False
+
+    # 深交所 LOF (16开头但不是159)
+    if stock_code.startswith('16') and not stock_code.startswith('159'):
+        return True
+
+    # 上交所 LOF
+    if stock_code.startswith(('501', '502', '503', '504', '505', '506')):
+        return True
+
+    return False
 
 
 def _is_us_code(stock_code: str) -> bool:
@@ -225,14 +314,14 @@ class EfinanceFetcher(BaseFetcher):
     def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         从 efinance 获取原始数据
-        
+
         根据代码类型自动选择 API：
         - 美股：不支持，抛出异常让 DataFetcherManager 切换到其他数据源
         - 普通股票：使用 ef.stock.get_quote_history()
-        - ETF 基金：使用 ef.fund.get_quote_history()
-        
+        - ETF/LOF 基金：使用 ef.fund.get_quote_history()
+
         流程：
-        1. 判断代码类型（美股/股票/ETF）
+        1. 判断代码类型（美股/股票/ETF/LOF）
         2. 设置随机 User-Agent
         3. 执行速率限制（随机休眠）
         4. 调用对应的 efinance API
@@ -241,9 +330,9 @@ class EfinanceFetcher(BaseFetcher):
         # 美股不支持，抛出异常让 DataFetcherManager 切换到 AkshareFetcher/YfinanceFetcher
         if _is_us_code(stock_code):
             raise DataFetchError(f"EfinanceFetcher 不支持美股 {stock_code}，请使用 AkshareFetcher 或 YfinanceFetcher")
-        
+
         # 根据代码类型选择不同的获取方法
-        if _is_etf_code(stock_code):
+        if _is_etf_code(stock_code) or _is_lof_code(stock_code) or _is_other_fund_code(stock_code):
             return self._fetch_etf_data(stock_code, start_date, end_date)
         else:
             return self._fetch_stock_data(stock_code, start_date, end_date)
@@ -317,50 +406,51 @@ class EfinanceFetcher(BaseFetcher):
     
     def _fetch_etf_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
-        获取 ETF 基金历史数据
-        
+        获取 ETF/LOF 基金历史数据
+
         数据来源：ef.fund.get_quote_history()
-        
+
         Args:
-            stock_code: ETF 代码，如 '512400', '159883'
+            stock_code: ETF/LOF 代码，如 '512400', '159883', '161226'
             start_date: 开始日期，格式 'YYYY-MM-DD'
             end_date: 结束日期，格式 'YYYY-MM-DD'
-            
+
         Returns:
-            ETF 历史数据 DataFrame
+            基金历史数据 DataFrame
         """
         import efinance as ef
-        
+
         # 防封禁策略 1: 随机 User-Agent
         self._set_random_user_agent()
-        
+
         # 防封禁策略 2: 强制休眠
         self._enforce_rate_limit()
-        
+
         # 格式化日期
         beg_date = start_date.replace('-', '')
         end_date_fmt = end_date.replace('-', '')
-        
-        logger.info(f"[API调用] ef.fund.get_quote_history(fund_code={stock_code})")
-        
+
+        fund_type = "LOF" if _is_lof_code(stock_code) else "ETF"
+        logger.info(f"[API调用] ef.fund.get_quote_history(fund_code={stock_code}) [{fund_type}]")
+
         try:
             import time as _time
             api_start = _time.time()
-            
-            # 调用 efinance 获取 ETF 日线数据
+
+            # 调用 efinance 获取基金日线数据
             # 注意: ef.fund.get_quote_history 不支持 beg/end/klt/fqt 参数
             # 它返回的是 NAV 数据: 日期, 单位净值, 累计净值, 涨跌幅
             df = ef.fund.get_quote_history(fund_code=stock_code)
-            
+
             # 手动过滤日期
             if df is not None and not df.empty and '日期' in df.columns:
                 # 确保日期列是字符串格式，且格式匹配筛选条件
                 # ef 返回的日期通常是 'YYYY-MM-DD'
                 mask = (df['日期'] >= start_date) & (df['日期'] <= end_date)
                 df = df[mask].copy()
-            
+
             api_elapsed = _time.time() - api_start
-            
+
             # 记录返回数据摘要
             if df is not None and not df.empty:
                 logger.info(f"[API返回] ef.fund.get_quote_history 成功: 返回 {len(df)} 行数据, 耗时 {api_elapsed:.2f}s")
@@ -370,18 +460,18 @@ class EfinanceFetcher(BaseFetcher):
                 logger.debug(f"[API返回] 最新3条数据:\n{df.tail(3).to_string()}")
             else:
                 logger.warning(f"[API返回] ef.fund.get_quote_history 返回空数据, 耗时 {api_elapsed:.2f}s")
-            
+
             return df
-            
+
         except Exception as e:
             error_msg = str(e).lower()
-            
+
             # 检测反爬封禁
             if any(keyword in error_msg for keyword in ['banned', 'blocked', '频率', 'rate', '限制']):
                 logger.warning(f"检测到可能被封禁: {e}")
                 raise RateLimitError(f"efinance 可能被限流: {e}") from e
-            
-            raise DataFetchError(f"efinance 获取 ETF 数据失败: {e}") from e
+
+            raise DataFetchError(f"efinance 获取 {fund_type} 数据失败: {e}") from e
     
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
         """
@@ -635,14 +725,67 @@ class EfinanceFetcher(BaseFetcher):
             logger.error(f"[API错误] 获取 {stock_code} 所属板块失败: {e}")
             return None
     
+    def get_market_stats(self) -> Optional[Dict[str, Any]]:
+        """
+        获取市场涨跌统计 (efinance 接口)
+
+        Returns:
+            Dict: 包含 up_count, down_count, flat_count, limit_up_count, limit_down_count, total_amount
+        """
+        import efinance as ef
+        try:
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            # 获取全部A股实时行情
+            df = ef.stock.get_realtime_quotes()
+
+            if df is None:
+                logger.warning("[Efinance] get_realtime_quotes 返回 None")
+                return None
+            if df.empty:
+                logger.warning("[Efinance] get_realtime_quotes 返回空 DataFrame")
+                return None
+
+            # efinance 返回的列名
+            change_col = '涨跌幅'
+            if change_col not in df.columns:
+                logger.warning(f"[Efinance] DataFrame 缺少 '{change_col}' 列，可用列: {list(df.columns)}")
+                return None
+
+            # 转换为数值
+            df[change_col] = pd.to_numeric(df[change_col], errors='coerce')
+
+            stats = {
+                'up_count': len(df[df[change_col] > 0]),
+                'down_count': len(df[df[change_col] < 0]),
+                'flat_count': len(df[df[change_col] == 0]),
+                'limit_up_count': len(df[df[change_col] >= 9.9]),
+                'limit_down_count': len(df[df[change_col] <= -9.9]),
+                'total_amount': 0.0
+            }
+
+            # 计算两市成交额
+            amount_col = '成交额'
+            if amount_col in df.columns:
+                df[amount_col] = pd.to_numeric(df[amount_col], errors='coerce')
+                stats['total_amount'] = df[amount_col].sum() / 1e8  # 转为亿元
+
+            logger.info(f"[Efinance] 市场统计: 涨{stats['up_count']} 跌{stats['down_count']} 平{stats['flat_count']}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"[Efinance] 获取市场统计失败: {e}")
+            return None
+
     def get_enhanced_data(self, stock_code: str, days: int = 60) -> Dict[str, Any]:
         """
         获取增强数据（历史K线 + 实时行情 + 基本信息）
-        
+
         Args:
             stock_code: 股票代码
             days: 历史数据天数
-            
+
         Returns:
             包含所有数据的字典
         """

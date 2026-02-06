@@ -182,6 +182,8 @@ class MarketAnalyzer:
                 logger.info(f"[大盘] 涨:{overview.up_count} 跌:{overview.down_count} 平:{overview.flat_count} "
                           f"涨停:{overview.limit_up_count} 跌停:{overview.limit_down_count} "
                           f"成交额:{overview.total_amount:.0f}亿")
+            else:
+                logger.warning("[大盘] 获取涨跌统计返回空数据，将显示为0")
 
         except Exception as e:
             logger.error(f"[大盘] 获取涨跌统计失败: {e}")

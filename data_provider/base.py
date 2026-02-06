@@ -790,9 +790,12 @@ class DataFetcherManager:
                 if data:
                     logger.info(f"[{fetcher.name}] 获取市场统计成功")
                     return data
+                else:
+                    logger.debug(f"[{fetcher.name}] get_market_stats 返回空")
             except Exception as e:
                 logger.warning(f"[{fetcher.name}] 获取市场统计失败: {e}")
                 continue
+        logger.warning("[DataManager] 所有数据源获取市场统计失败")
         return {}
 
     def get_sector_rankings(self, n: int = 5) -> Tuple[List[Dict], List[Dict]]:
