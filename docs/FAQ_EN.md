@@ -231,8 +231,11 @@ Supported model services:
 # Local run
 python main.py --market-only
 
+# Precious metals analysis (Gold/Silver)
+python main.py --precious-metals
+
 # GitHub Actions
-# Select mode: market-only when manually triggering
+# Select mode: market-only or precious-metals when manually triggering
 ```
 
 ---

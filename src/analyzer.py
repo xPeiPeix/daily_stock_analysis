@@ -15,11 +15,18 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
-from json_repair import repair_json
+try:
+    from json_repair import repair_json
+except ImportError:
+    repair_json = None
 
 from src.config import get_config
 
 logger = logging.getLogger(__name__)
+
+# Log json_repair availability at module load
+if repair_json is None:
+    logging.getLogger(__name__).debug("json_repair not installed, JSON repair fallback disabled")
 
 
 # 股票名称映射（常见股票）
@@ -1387,10 +1394,11 @@ class GeminiAnalyzer:
         
         # 确保布尔值是小写
         json_str = json_str.replace('True', 'true').replace('False', 'false')
-        
-        # fix by json-repair
-        json_str = repair_json(json_str)
-        
+
+        # fix by json-repair if available
+        if repair_json:
+            json_str = repair_json(json_str)
+
         return json_str
     
     def _parse_text_response(

@@ -17,6 +17,7 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+          - precious-metals  # 仅贵金属分析（黄金/白银）
 
 # 并发控制：同一时间只运行一个分析任务
 concurrency:
@@ -188,6 +189,8 @@ jobs:
             python main.py --market-review
           elif [ "$MODE" = "stocks-only" ]; then
             python main.py --no-market-review
+          elif [ "$MODE" = "precious-metals" ]; then
+            python main.py --precious-metals
           else
             python main.py
           fi

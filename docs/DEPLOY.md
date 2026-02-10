@@ -385,6 +385,7 @@ git push
    - `full` - 完整分析（股票+大盘）
    - `market-only` - 仅大盘复盘
    - `stocks-only` - 仅股票分析
+   - `precious-metals` - 仅贵金属分析（黄金/白银）
 5. 点击绿色 **"Run workflow"** 按钮
 
 #### 5. 查看执行日志

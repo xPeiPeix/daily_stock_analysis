@@ -85,6 +85,7 @@ from src.logging_config import setup_logging
 from src.notification import NotificationService
 from src.core.pipeline import StockAnalysisPipeline
 from src.core.market_review import run_market_review
+from src.precious_metals import run_precious_metals_review
 from src.search_service import SearchService
 from src.analyzer import GeminiAnalyzer
 
@@ -107,6 +108,7 @@ def parse_arguments() -> argparse.Namespace:
   python main.py --single-notify    # 启用单股推送模式（每分析完一只立即推送）
   python main.py --schedule         # 启用定时任务模式
   python main.py --market-review    # 仅运行大盘复盘
+  python main.py --precious-metals  # 运行贵金属分析
         '''
     )
 
@@ -163,6 +165,12 @@ def parse_arguments() -> argparse.Namespace:
         '--no-market-review',
         action='store_true',
         help='跳过大盘复盘分析'
+    )
+
+    parser.add_argument(
+        '--precious-metals',
+        action='store_true',
+        help='运行贵金属（黄金/白银）分析'
     )
 
     parser.add_argument(
@@ -266,6 +274,18 @@ def run_full_analysis(
             # 如果有结果，赋值给 market_report 用于后续飞书文档生成
             if review_result:
                 market_report = review_result
+
+        # 3. 运行贵金属分析（如果启用）
+        if config.precious_metals_enabled:
+            logger.info("运行贵金属分析...")
+            if analysis_delay > 0:
+                logger.info(f"等待 {analysis_delay} 秒后执行贵金属分析（避免API限流）...")
+                time.sleep(analysis_delay)
+            run_precious_metals_review(
+                notifier=pipeline.notifier,
+                search_service=pipeline.search_service,
+                send_notification=not args.no_notify
+            )
 
         # 输出摘要
         if results:
@@ -489,13 +509,35 @@ def main() -> int:
                 logger.warning("未检测到 API Key (Gemini/OpenAI)，将仅使用模板生成报告")
             
             run_market_review(
-                notifier=notifier, 
-                analyzer=analyzer, 
+                notifier=notifier,
+                analyzer=analyzer,
                 search_service=search_service,
                 send_notification=not args.no_notify
             )
             return 0
-        
+
+        # 模式1.5: 仅贵金属分析
+        if args.precious_metals:
+            logger.info("模式: 贵金属分析")
+            notifier = NotificationService()
+
+            # 初始化搜索服务（如果有配置）
+            search_service = None
+            if config.bocha_api_keys or config.tavily_api_keys or config.brave_api_keys or config.serpapi_keys:
+                search_service = SearchService(
+                    bocha_keys=config.bocha_api_keys,
+                    tavily_keys=config.tavily_api_keys,
+                    brave_keys=config.brave_api_keys,
+                    serpapi_keys=config.serpapi_keys
+                )
+
+            run_precious_metals_review(
+                notifier=notifier,
+                search_service=search_service,
+                send_notification=not args.no_notify
+            )
+            return 0
+
         # 模式2: 定时任务模式
         if args.schedule or config.schedule_enabled:
             logger.info("模式: 定时任务")

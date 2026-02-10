@@ -146,6 +146,15 @@ class Config:
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
 
+    # === 贵金属分析配置 ===
+    # 数据来源:
+    #   - 国际价格: YFinance (COMEX 期货 GC=F/SI=F, 美东时间)
+    #   - 国内价格: AkShare (上期所 AU0/AG0, 北京时间)
+    #   - 关联指标: 美元指数(DX-Y.NYB), 10年美债(^TNX)
+    # 涨跌幅: 计算得出 = (今收 - 昨收) / 昨收 × 100%
+    precious_metals_enabled: bool = False     # 是否启用贵金属分析
+    precious_metals_list: List[str] = field(default_factory=lambda: ['GOLD', 'SILVER'])  # 分析品种
+
     # === 实时行情增强数据配置 ===
     # 实时行情开关（关闭后使用历史收盘价进行分析）
     enable_realtime_quote: bool = True
@@ -347,6 +356,9 @@ class Config:
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
+            # 贵金属分析配置
+            precious_metals_enabled=os.getenv('PRECIOUS_METALS_ENABLED', 'false').lower() == 'true',
+            precious_metals_list=[m.strip() for m in os.getenv('PRECIOUS_METALS_LIST', 'GOLD,SILVER').split(',') if m.strip()],
             webui_enabled=os.getenv('WEBUI_ENABLED', 'false').lower() == 'true',
             webui_host=os.getenv('WEBUI_HOST', '127.0.0.1'),
             webui_port=int(os.getenv('WEBUI_PORT', '8000')),
