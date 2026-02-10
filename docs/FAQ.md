@@ -231,8 +231,11 @@ OPENAI_MODEL=deepseek-chat
 # 本地运行
 python main.py --market-only
 
+# 贵金属分析（黄金/白银）
+python main.py --precious-metals
+
 # GitHub Actions
-# 手动触发时选择 mode: market-only
+# 手动触发时选择 mode: market-only 或 precious-metals
 ```
 
 ---

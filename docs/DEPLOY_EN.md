@@ -385,6 +385,7 @@ git push
    - `full` - Full analysis (stocks + market)
    - `market-only` - Market review only
    - `stocks-only` - Stock analysis only
+   - `precious-metals` - Precious metals analysis only (Gold/Silver)
 5. Click green **"Run workflow"** button
 
 #### 5. View Execution Logs
