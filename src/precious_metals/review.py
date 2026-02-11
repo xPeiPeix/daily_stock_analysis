@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 def generate_precious_metals_report(
     overview: PreciousMetalsOverview,
     results: Dict[MetalType, PreciousMetalsAnalysisResult],
+    news_contexts: Optional[Dict[MetalType, str]] = None,
+    macro_news: Optional[str] = None,
 ) -> str:
     """
     Generate markdown report for precious metals
@@ -40,6 +42,8 @@ def generate_precious_metals_report(
     Args:
         overview: Market overview data
         results: Analysis results for each metal
+        news_contexts: News context for each metal
+        macro_news: Macro economic news
 
     Returns:
         Formatted markdown report
@@ -212,6 +216,26 @@ def generate_precious_metals_report(
             "> - 多平：价格↓ + OI↓ = 多头平仓（止损或获利，下跌动能可能减弱）",
             "",
         ])
+
+    # News section
+    has_news = (news_contexts and any(news_contexts.values())) or macro_news
+    if has_news:
+        report_lines.extend([
+            "## 📰 市场新闻动态",
+            "",
+        ])
+
+        # Macro news first
+        if macro_news:
+            report_lines.append(macro_news)
+            report_lines.append("")
+
+        # Metal-specific news
+        if news_contexts:
+            for metal_type in [MetalType.GOLD, MetalType.SILVER]:
+                if metal_type in news_contexts and news_contexts[metal_type]:
+                    report_lines.append(news_contexts[metal_type])
+                    report_lines.append("")
 
     # Analysis sections for each metal
     for metal_type in [MetalType.GOLD, MetalType.SILVER]:
@@ -394,9 +418,16 @@ def run_precious_metals_review(
 
         overview = result["overview"]
         analysis_results = result["results"]
+        news_contexts = result.get("news_contexts", {})
+        macro_news = result.get("macro_news")
 
         # Generate report
-        report = generate_precious_metals_report(overview, analysis_results)
+        report = generate_precious_metals_report(
+            overview,
+            analysis_results,
+            news_contexts=news_contexts,
+            macro_news=macro_news,
+        )
 
         if report:
             # Save report to file
