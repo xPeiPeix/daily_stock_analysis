@@ -303,19 +303,15 @@ class DataFetcherManager:
         """
         初始化默认数据源列表
 
-        优先级动态调整逻辑：
-        - 如果配置了 TUSHARE_TOKEN：Tushare 优先级提升为 0（最高）
-        - 否则按默认优先级：
+        优先级：
           0. EfinanceFetcher (Priority 0) - 最高优先级
           1. AkshareFetcher (Priority 1)
           2. PytdxFetcher (Priority 2) - 通达信
-          2. TushareFetcher (Priority 2)
           3. BaostockFetcher (Priority 3)
           4. YfinanceFetcher (Priority 4)
         """
         from .efinance_fetcher import EfinanceFetcher
         from .akshare_fetcher import AkshareFetcher
-        from .tushare_fetcher import TushareFetcher
         from .pytdx_fetcher import PytdxFetcher
         from .baostock_fetcher import BaostockFetcher
         from .yfinance_fetcher import YfinanceFetcher
@@ -323,10 +319,9 @@ class DataFetcherManager:
 
         config = get_config()
 
-        # 创建所有数据源实例（优先级在各 Fetcher 的 __init__ 中确定）
+        # 创建所有数据源实例
         efinance = EfinanceFetcher()
         akshare = AkshareFetcher()
-        tushare = TushareFetcher()  # 会根据 Token 配置自动调整优先级
         pytdx = PytdxFetcher()      # 通达信数据源
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
@@ -335,13 +330,12 @@ class DataFetcherManager:
         self._fetchers = [
             efinance,
             akshare,
-            tushare,
             pytdx,
             baostock,
             yfinance,
         ]
 
-        # 按优先级排序（Tushare 如果配置了 Token 且初始化成功，优先级为 0）
+        # 按优先级排序
         self._fetchers.sort(key=lambda f: f.priority)
 
         # 构建优先级说明
@@ -443,10 +437,10 @@ class DataFetcherManager:
             return 0
         
         # 检查优先级中是否包含全量拉取数据源
-        # 注意：新增全量接口（如 tushare_realtime）时需同步更新此列表
+        # 注意：新增全量接口时需同步更新此列表
         # 全量接口特征：一次 API 调用拉取全市场 5000+ 股票数据
         priority = config.realtime_source_priority.lower()
-        bulk_sources = ['efinance', 'akshare_em', 'tushare']  # 全量接口列表
+        bulk_sources = ['efinance', 'akshare_em']  # 全量接口列表
         
         # 如果优先级中前两个都不是全量数据源，跳过预取
         # 因为新浪/腾讯是单股票查询，不需要预取
@@ -577,15 +571,7 @@ class DataFetcherManager:
                             if hasattr(fetcher, 'get_realtime_quote'):
                                 quote = fetcher.get_realtime_quote(stock_code, source="tencent")
                             break
-                
-                elif source == "tushare":
-                    # 尝试 TushareFetcher（需要 Tushare Pro 积分）
-                    for fetcher in self._fetchers:
-                        if fetcher.name == "TushareFetcher":
-                            if hasattr(fetcher, 'get_realtime_quote'):
-                                quote = fetcher.get_realtime_quote(stock_code)
-                            break
-                
+
                 if quote is not None and quote.has_basic_data():
                     if primary_quote is None:
                         # First successful source becomes primary
@@ -666,7 +652,7 @@ class DataFetcherManager:
         策略：
         1. 检查配置开关
         2. 检查熔断器状态
-        3. 依次尝试多个数据源：AkshareFetcher -> TushareFetcher -> EfinanceFetcher
+        3. 依次尝试多个数据源：AkshareFetcher -> EfinanceFetcher
         4. 所有数据源失败则返回 None（降级兜底）
 
         Args:
@@ -690,7 +676,6 @@ class DataFetcherManager:
         # 定义筹码数据源优先级列表
         chip_sources = [
             ("AkshareFetcher", "akshare_chip"),
-            ("TushareFetcher", "tushare_chip"),
             ("EfinanceFetcher", "efinance_chip"),
         ]
 
