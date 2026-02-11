@@ -183,9 +183,7 @@ def generate_precious_metals_report(
     # OI signals section
     if overview.gold_oi_signal or overview.silver_oi_signal:
         report_lines.extend([
-            "## 🔄 价格+持仓信号",
-            "",
-            "> ⚠️ **数据说明**: 价格变化=COMEX国际市场，OI变化=上海期货（沪金/沪银），两市场可能存在差异",
+            "## 🔄 价格+持仓信号 (上海期货)",
             "",
             "| 品种 | 价格变化 | OI变化 | 信号 |",
             "|------|----------|--------|------|",

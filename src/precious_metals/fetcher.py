@@ -768,6 +768,9 @@ class PreciousMetalsFetcher:
         """
         Calculate Price + OI combined signal
 
+        Uses domestic (Shanghai futures) data for both price and OI
+        to ensure data source consistency.
+
         Signal logic:
         - Price↑ + OI↑ → new_longs (多开): Bullish continuation
         - Price↑ + OI↓ → short_covering (空平): Rally may slow
@@ -785,9 +788,21 @@ class PreciousMetalsFetcher:
         if not oi_data:
             return None
 
-        # Get price change
-        price_change = quote.intl_change if quote.intl_change is not None else 0
-        price_change_pct = quote.intl_change_pct if quote.intl_change_pct is not None else 0
+        # Use domestic price change (Shanghai futures) for consistency with OI data
+        # Priority: settlement-based change > close-based change > international change
+        if quote.domestic_change_pct is not None:
+            price_change = quote.domestic_change if quote.domestic_change is not None else 0
+            price_change_pct = quote.domestic_change_pct
+            price_source = "沪期货(结算价)"
+        elif quote.domestic_change_pct_by_close is not None:
+            price_change = quote.domestic_change_by_close if quote.domestic_change_by_close is not None else 0
+            price_change_pct = quote.domestic_change_pct_by_close
+            price_source = "沪期货(收盘价)"
+        else:
+            # Fallback to international price if domestic not available
+            price_change = quote.intl_change if quote.intl_change is not None else 0
+            price_change_pct = quote.intl_change_pct if quote.intl_change_pct is not None else 0
+            price_source = "COMEX(回退)"
 
         signal = OISignal(
             metal_type=metal_type,
@@ -801,7 +816,7 @@ class PreciousMetalsFetcher:
 
         logger.info(
             f"OI Signal for {metal_type.value}: "
-            f"Price {price_change_pct:+.2f}% + OI {oi_data['change_pct']:+.2f}% → {signal.signal_cn}"
+            f"Price[{price_source}] {price_change_pct:+.2f}% + OI {oi_data['change_pct']:+.2f}% → {signal.signal_cn}"
         )
 
         return signal
