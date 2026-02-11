@@ -31,6 +31,8 @@ from src.precious_metals.models import (
     CorrelationIndicator,
     PreciousMetalsOverview,
     PreciousMetalsAnalysisResult,
+    COTPositions,
+    OISignal,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,22 +75,39 @@ class PreciousMetalsAIAnalyzer:
 - 战争、危机 → 避险需求推升金价
 - 局势缓和 → 避险溢价消退
 
-### 2. 金银比分析
+### 2. 持仓分析框架（宏观+微观）
+
+**宏观过滤 (CFTC COT持仓)** - ⚠️ 滞后数据，仅供参考：
+- COT报告每周五发布，反映周二持仓，有3-8天延迟
+- 作为宏观情绪背景参考，不作为当日交易的主要依据
+- 投机者净多头占比 > 70%：历史情绪极度看涨
+- 投机者净多头占比 55-70%：历史情绪温和看涨
+- 投机者净多头占比 45-55%：历史情绪中性
+- 投机者净多头占比 30-45%：历史情绪温和看跌
+- 投机者净多头占比 < 30%：历史情绪极度看跌
+
+**微观触发 (价格+OI信号)** - 相对实时：
+- 多开信号：价格上涨 + 持仓增加 → 新多头入场，趋势可能延续
+- 空平信号：价格上涨 + 持仓减少 → 空头平仓（止损或获利），上涨动能可能减弱
+- 空开信号：价格下跌 + 持仓增加 → 新空头入场，趋势可能延续
+- 多平信号：价格下跌 + 持仓减少 → 多头平仓（止损或获利），下跌动能可能减弱
+
+### 3. 金银比分析
 - 金银比 = 黄金价格 / 白银价格
 - 历史均值约 60-70
 - 金银比 > 80：白银相对低估，可能补涨
 - 金银比 < 60：黄金相对低估，可能补涨
 
-### 3. 技术分析要点
+### 4. 技术分析要点
 - 关注关键支撑/阻力位（整数关口、历史高低点）
 - 趋势线和通道
 - 成交量配合
 - 不强调均线排列（与股票分析不同）
 
-### 4. 操作建议原则
-- **买入信号**：美元走弱 + 收益率下降 + 技术支撑有效
-- **卖出信号**：美元走强 + 收益率上升 + 技术阻力明显
-- **观望信号**：宏观信号矛盾 + 技术面震荡
+### 5. 操作建议原则
+- **买入信号**：美元走弱 + 收益率下降 + OI多开（实时）+ 技术支撑有效 + [COT历史偏多作为背景参考]
+- **卖出信号**：美元走强 + 收益率上升 + OI空开（实时）+ 技术阻力明显 + [COT历史偏空作为背景参考]
+- **观望信号**：宏观信号矛盾 + 技术面震荡 + OI中性
 
 ## 输出格式：JSON
 
@@ -108,7 +127,9 @@ class PreciousMetalsAIAnalyzer:
         "usd_impact": "美元指数对贵金属的影响分析",
         "yield_impact": "美债收益率对贵金属的影响分析",
         "inflation_outlook": "通胀预期分析",
-        "geopolitical_risk": "地缘政治风险评估"
+        "geopolitical_risk": "地缘政治风险评估",
+        "cot_analysis": "COT持仓分析（宏观情绪）",
+        "oi_signal_analysis": "价格+OI信号分析（微观触发）"
     },
 
     "correlation_summary": "关键相关性指标综合解读",
@@ -128,6 +149,12 @@ class PreciousMetalsAIAnalyzer:
         "key_events": "需关注的重要事件"
     },
 
+    "operation_by_timeframe": {
+        "ultra_short": "超短线操作建议（日内/隔日）：具体买卖点位和仓位",
+        "short_term": "短期操作建议（1-2天）：方向、点位、止损",
+        "medium_term": "中期操作建议（1-2周）：趋势判断、建仓策略"
+    },
+
     "positive_catalysts": ["利好因素1", "利好因素2"],
     "negative_catalysts": ["利空因素1", "利空因素2"],
 
@@ -143,22 +170,29 @@ class PreciousMetalsAIAnalyzer:
 - ✅ 美元走弱趋势明确
 - ✅ 实际利率下降
 - ✅ 避险需求上升
+- ✅ OI信号为多开（实时指标）
+- ⚪ COT历史偏多（滞后参考）
 - ✅ 技术面突破阻力
 
 ### 看多（60-79分）：
 - ✅ 宏观环境偏利好
 - ✅ 技术面支撑有效
+- ✅ OI信号偏多或中性
+- ⚪ COT历史偏多（滞后参考）
 - ⚪ 允许一项次要因素不利
 
 ### 震荡/观望（40-59分）：
 - ⚠️ 宏观信号矛盾
 - ⚠️ 技术面方向不明
+- ⚠️ OI信号中性
 - ⚠️ 等待关键数据/事件
 
 ### 看空（0-39分）：
 - ❌ 美元走强
 - ❌ 实际利率上升
 - ❌ 避险需求消退
+- ❌ OI信号为空开（实时指标）
+- ⚪ COT历史偏空（滞后参考）
 - ❌ 技术面跌破支撑"""
 
     def __init__(self, api_key: Optional[str] = None):
@@ -546,6 +580,77 @@ class PreciousMetalsAIAnalyzer:
 | 当前比值 | {overview.gold_silver_ratio:.2f} | {overview.gold_silver_ratio_status} |
 """
 
+        # Add COT positions section
+        gold_cot = overview.gold_cot
+        silver_cot = overview.silver_cot
+        if gold_cot or silver_cot:
+            # Calculate data delay
+            from datetime import datetime
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            cot_date = gold_cot.report_date if gold_cot else silver_cot.report_date
+            # Clean date format (remove time portion if present)
+            if 'T' in cot_date:
+                cot_date = cot_date.split('T')[0]
+
+            prompt += f"""
+---
+
+## 📈 CFTC 投机者持仓 (COT)
+
+> ⚠️ **数据滞后说明**: COT报告每周五发布，反映周二持仓。当前数据截至 {cot_date}，距今约有 3-8 天延迟，仅反映历史情绪，作为宏观背景参考，不作为当日交易依据。
+"""
+            if gold_cot:
+                prompt += f"""
+### 黄金 COT
+| 指标 | 数值 |
+|------|------|
+| 多头持仓 | {gold_cot.long_positions:,} |
+| 空头持仓 | {gold_cot.short_positions:,} |
+| 净持仓 | {gold_cot.net_positions:+,} |
+| 净多头占比 | {gold_cot.net_long_pct:.1f}% |
+| 历史偏向 | {gold_cot.bias_cn} |
+"""
+                if gold_cot.weekly_change is not None:
+                    prompt += f"| 周变化 | {gold_cot.weekly_change:+,} |\n"
+
+            if silver_cot:
+                prompt += f"""
+### 白银 COT
+| 指标 | 数值 |
+|------|------|
+| 多头持仓 | {silver_cot.long_positions:,} |
+| 空头持仓 | {silver_cot.short_positions:,} |
+| 净持仓 | {silver_cot.net_positions:+,} |
+| 净多头占比 | {silver_cot.net_long_pct:.1f}% |
+| 历史偏向 | {silver_cot.bias_cn} |
+"""
+                if silver_cot.weekly_change is not None:
+                    prompt += f"| 周变化 | {silver_cot.weekly_change:+,} |\n"
+
+        # Add OI signals section
+        gold_oi = overview.gold_oi_signal
+        silver_oi = overview.silver_oi_signal
+        if gold_oi or silver_oi:
+            prompt += """
+---
+
+## 🔄 价格+持仓信号 (OI)
+| 品种 | 价格变化 | OI变化 | 信号 |
+|------|----------|--------|------|
+"""
+            if gold_oi:
+                prompt += f"| 黄金 | {gold_oi.price_change_pct:+.2f}% | {gold_oi.oi_change_pct:+.2f}% | {gold_oi.signal_emoji} {gold_oi.signal_cn} |\n"
+            if silver_oi:
+                prompt += f"| 白银 | {silver_oi.price_change_pct:+.2f}% | {silver_oi.oi_change_pct:+.2f}% | {silver_oi.signal_emoji} {silver_oi.signal_cn} |\n"
+
+            prompt += """
+> **信号解读**：
+> - 多开=新多头入场（趋势可能延续）
+> - 空平=空头平仓（止损或获利，上涨动能可能减弱）
+> - 空开=新空头入场（趋势可能延续）
+> - 多平=多头平仓（止损或获利，下跌动能可能减弱）
+"""
+
         prompt += """
 ---
 
@@ -578,15 +683,22 @@ class PreciousMetalsAIAnalyzer:
 ### 重点关注：
 1. ❓ 美元指数走势对{metal_name}的影响？
 2. ❓ 美债收益率变化对{metal_name}的影响？
-3. ❓ 当前价格处于什么技术位置？（支撑/阻力）
-4. ❓ 短期（1-3日）和中期（1-2周）趋势预判？
-5. ❓ 有无重大风险事件需要关注？
+3. ❓ COT持仓显示的宏观情绪偏向？
+4. ❓ 价格+OI信号显示的微观动能？
+5. ❓ 当前价格处于什么技术位置？（支撑/阻力）
+6. ❓ 短期（1-3日）和中期（1-2周）趋势预判？
+7. ❓ 有无重大风险事件需要关注？
 
 ### 输出要求：
 - **核心结论**：一句话说清该买/该卖/该等
-- **宏观分析**：美元、收益率、通胀的综合影响
+- **宏观分析**：美元、收益率、通胀、COT持仓的综合影响
+- **微观信号**：价格+OI组合信号解读
 - **技术点位**：具体的支撑位和阻力位（精确到美元）
 - **趋势预判**：短期和中期展望
+- **分周期操作建议**（重要）：
+  - 超短线（日内/隔日）：具体点位、方向、仓位建议
+  - 短期（1-2天）：操作方向、入场点位、止损位
+  - 中期（1-2周）：趋势判断、建仓/减仓策略
 
 请输出完整的 JSON 格式分析报告。"""
 
@@ -619,6 +731,11 @@ class PreciousMetalsAIAnalyzer:
                 trend_detail = data.get('trend_prediction_detail', {})
                 if not isinstance(trend_detail, dict):
                     trend_detail = {}
+
+                # Parse operation by timeframe
+                op_timeframe = data.get('operation_by_timeframe', {})
+                if not isinstance(op_timeframe, dict):
+                    op_timeframe = {}
 
                 # Safe parsing helpers
                 def safe_int(val, default=50):
@@ -681,6 +798,9 @@ class PreciousMetalsAIAnalyzer:
                     resistance_levels=safe_float_list(data.get('resistance_levels', [])),
                     short_term_outlook=str(trend_detail.get('short_term', data.get('short_term_outlook', ''))),
                     medium_term_outlook=str(trend_detail.get('medium_term', data.get('medium_term_outlook', ''))),
+                    ultra_short_advice=str(op_timeframe.get('ultra_short', data.get('ultra_short_advice', ''))),
+                    short_term_advice=str(op_timeframe.get('short_term', data.get('short_term_advice', ''))),
+                    medium_term_advice=str(op_timeframe.get('medium_term', data.get('medium_term_advice', ''))),
                     risk_warning=str(data.get('risk_warning', '')),
                     positive_catalysts=safe_str_list(data.get('positive_catalysts', [])),
                     negative_catalysts=safe_str_list(data.get('negative_catalysts', [])),
