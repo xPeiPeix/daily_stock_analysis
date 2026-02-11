@@ -514,6 +514,7 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
     def __init__(self):
         # DuckDuckGo 不需要 API Key，传入空列表
         super().__init__(["duckduckgo"], "DuckDuckGo")
+        self._rate_limited = False  # Track rate limit status to avoid warning spam
 
     @property
     def is_available(self) -> bool:
@@ -569,8 +570,10 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
             except Exception as e:
                 error_str = str(e).lower()
                 if 'ratelimit' in error_str or '202' in error_str:
+                    if not self._rate_limited:
+                        logger.warning(f"[DuckDuckGo] 速率限制，切换到其他搜索引擎")
+                        self._rate_limited = True
                     wait_time = 3 * (attempt + 1)  # 3, 6, 9 秒
-                    logger.warning(f"[DuckDuckGo] 速率限制，等待 {wait_time}s 后重试 ({attempt + 1}/{max_attempts})")
                     time.sleep(wait_time)
                     continue
                 # 其他错误直接返回失败，让系统切换到下一个搜索引擎
@@ -620,8 +623,10 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
             except Exception as e:
                 error_str = str(e).lower()
                 if 'ratelimit' in error_str or '202' in error_str:
+                    if not self._rate_limited:
+                        logger.warning(f"[DuckDuckGo] 速率限制，切换到其他搜索引擎")
+                        self._rate_limited = True
                     wait_time = 3 * (attempt + 1)
-                    logger.warning(f"[DuckDuckGo] 速率限制，等待 {wait_time}s 后重试 ({attempt + 1}/{max_attempts})")
                     time.sleep(wait_time)
                     continue
                 return SearchResponse(
@@ -1181,7 +1186,30 @@ class SearchService:
                 for k in oldest:
                     del self._cache[k]
         self._cache[key] = (time.time(), response)
-    
+
+    def search(self, query: str, max_results: int = 5, days: int = 7) -> List[SearchResult]:
+        """
+        Generic search method for simple queries.
+
+        Returns list of SearchResult objects (not SearchResponse).
+        This is a convenience method for use cases like precious_metals pipeline.
+
+        Args:
+            query: Search query string
+            max_results: Maximum number of results to return
+            days: Search time range in days
+
+        Returns:
+            List of SearchResult objects, empty list if all providers fail
+        """
+        for provider in self._providers:
+            if not provider.is_available:
+                continue
+            response = provider.search(query, max_results, days=days)
+            if response.success and response.results:
+                return response.results
+        return []
+
     def search_stock_news(
         self,
         stock_code: str,

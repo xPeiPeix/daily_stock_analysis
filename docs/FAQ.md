@@ -66,6 +66,122 @@
 
 ---
 
+### Q4.1: 东方财富接口连接失败 (push2.eastmoney.com)
+
+**现象**：日志持续报错，无法获取实时行情：
+```
+HTTPConnectionPool(host='push2.eastmoney.com', port=80): Max retries exceeded
+Caused by ProtocolError('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+```
+
+**排查步骤**：
+
+1. **检查 DNS 解析**
+   ```bash
+   nslookup push2.eastmoney.com
+   ```
+   如果返回 `198.18.x.x` 这样的地址，说明被代理软件（Clash/Surge/V2Ray）的 **Fake IP 模式**拦截了。
+
+2. **检查系统代理**
+   ```python
+   import urllib.request
+   print(urllib.request.getproxies())
+   # 如果显示 {'http': 'http://127.0.0.1:7890', ...} 说明走了代理
+   ```
+
+3. **测试直连**
+   ```bash
+   # 设置 NO_PROXY 后测试
+   NO_PROXY="*" curl -v http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fs=m:0+t:6
+   ```
+
+**根本原因**：
+
+这个问题可能有两种情况：
+
+1. **代理软件拦截**：Clash/Surge 的 Fake IP 模式拦截了请求
+2. **IP 被封禁**：东方财富服务器封禁/限流了你的 IP
+
+**如何判断**：
+```bash
+# 1. 检查 DNS - 如果返回 198.18.x.x 说明是代理问题
+nslookup push2.eastmoney.com
+
+# 2. 绕过代理测试 - 如果仍然失败说明是 IP 被封
+NO_PROXY="*" curl http://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&fs=m:0+t:6
+
+# 3. 测试备用接口 - 新浪/腾讯通常不会封禁
+curl http://hq.sinajs.cn/list=sh600519
+```
+
+> ⚠️ **重要**：即使配置了 Clash 直连规则，如果你的 IP 已被东方财富封禁，仍然无法连接。此时只能使用备用数据源或等待解封。
+
+**解决方案**：
+
+#### 方案 1：配置代理软件直连规则（推荐）
+
+在 Clash/Surge 配置中添加：
+
+```yaml
+# 规则部分
+rules:
+  - DOMAIN-SUFFIX,eastmoney.com,DIRECT
+  - DOMAIN-SUFFIX,gtimg.cn,DIRECT      # 腾讯财经
+  - DOMAIN-SUFFIX,sinajs.cn,DIRECT     # 新浪财经
+  - DOMAIN-SUFFIX,sina.com.cn,DIRECT
+  - DOMAIN-SUFFIX,tushare.pro,DIRECT
+  - DOMAIN-SUFFIX,baostock.com,DIRECT
+```
+
+如果使用 **TUN 模式 + Fake IP**，还需要在 DNS 设置中添加过滤：
+
+```yaml
+dns:
+  enable: true
+  fake-ip-filter:
+    - '*.eastmoney.com'
+    - '*.gtimg.cn'
+    - '*.sinajs.cn'
+    - '*.sina.com.cn'
+```
+
+配置后**重启代理软件**并清除 DNS 缓存：
+```bash
+# Windows
+ipconfig /flushdns
+
+# macOS
+sudo dscacheutil -flushcache
+```
+
+#### 方案 2：临时关闭 TUN 模式
+
+在代理软件中关闭 TUN/虚拟网卡模式，仅使用系统代理模式。
+
+#### 方案 3：使用备用数据源
+
+即使东方财富被封，新浪和腾讯接口通常仍可用。配置优先级：
+```bash
+# .env 文件
+REALTIME_SOURCE_PRIORITY=tencent,akshare_sina,efinance,akshare_em
+```
+
+**验证修复**：
+```python
+import requests
+# 测试新浪接口
+r = requests.get('http://hq.sinajs.cn/list=sh600519',
+                 headers={'Referer': 'http://finance.sina.com.cn'})
+print(r.text)  # 应该返回股票数据
+```
+
+> 📌 技术细节：
+> - `198.18.x.x` 是 Clash Fake IP 模式使用的保留地址段
+> - TUN 模式在 IP 层拦截流量，即使设置 `NO_PROXY` 也无效
+> - 新浪/腾讯接口支持股票、ETF、LOF 等所有证券类型
+
+---
+
 ## ⚙️ 配置相关
 
 ### Q5: GitHub Actions 运行失败，提示找不到环境变量？
@@ -257,4 +373,4 @@ python main.py --precious-metals
 
 ---
 
-*最后更新：2026-02-01*
+*最后更新：2026-02-11*

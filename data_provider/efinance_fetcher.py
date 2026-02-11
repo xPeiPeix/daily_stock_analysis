@@ -135,6 +135,13 @@ _etf_realtime_cache: Dict[str, Any] = {
     'ttl': 600  # 10分钟缓存有效期
 }
 
+# LOF 实时行情缓存
+_lof_realtime_cache: Dict[str, Any] = {
+    'data': None,
+    'timestamp': 0,
+    'ttl': 600  # 10分钟缓存有效期
+}
+
 
 def _is_etf_code(stock_code: str) -> bool:
     """
@@ -555,6 +562,10 @@ class EfinanceFetcher(BaseFetcher):
         if _is_etf_code(stock_code):
             return self._get_etf_realtime_quote(stock_code)
 
+        # LOF 需要单独请求 LOF 实时行情接口
+        if _is_lof_code(stock_code):
+            return self._get_lof_realtime_quote(stock_code)
+
         import efinance as ef
         circuit_breaker = get_realtime_circuit_breaker()
         source_key = "efinance"
@@ -744,6 +755,100 @@ class EfinanceFetcher(BaseFetcher):
             return quote
         except Exception as e:
             logger.error(f"[API错误] 获取 ETF {stock_code} 实时行情(efinance)失败: {e}")
+            circuit_breaker.record_failure(source_key, str(e))
+            return None
+
+    def _get_lof_realtime_quote(self, stock_code: str) -> Optional[UnifiedRealtimeQuote]:
+        """
+        获取 LOF 基金实时行情
+
+        efinance 使用 ef.stock.get_realtime_quotes(['LOF']) 获取 LOF 实时行情。
+        """
+        import efinance as ef
+        circuit_breaker = get_realtime_circuit_breaker()
+        source_key = "efinance_lof"
+
+        if not circuit_breaker.is_available(source_key):
+            logger.warning(f"[熔断] 数据源 {source_key} 处于熔断状态，跳过")
+            return None
+
+        try:
+            current_time = time.time()
+            if (
+                _lof_realtime_cache['data'] is not None and
+                current_time - _lof_realtime_cache['timestamp'] < _lof_realtime_cache['ttl']
+            ):
+                df = _lof_realtime_cache['data']
+                cache_age = int(current_time - _lof_realtime_cache['timestamp'])
+                logger.debug(f"[缓存命中] LOF实时行情(efinance) - 缓存年龄 {cache_age}s/{_lof_realtime_cache['ttl']}s")
+            else:
+                self._set_random_user_agent()
+                self._enforce_rate_limit()
+
+                logger.info("[API调用] ef.stock.get_realtime_quotes(['LOF']) 获取LOF实时行情...")
+                import time as _time
+                api_start = _time.time()
+                df = ef.stock.get_realtime_quotes(['LOF'])
+                api_elapsed = _time.time() - api_start
+
+                if df is not None and not df.empty:
+                    logger.info(f"[API返回] LOF 实时行情成功: {len(df)} 条, 耗时 {api_elapsed:.2f}s")
+                    circuit_breaker.record_success(source_key)
+                else:
+                    logger.warning(f"[API返回] LOF 实时行情为空, 耗时 {api_elapsed:.2f}s")
+                    df = pd.DataFrame()
+
+                _lof_realtime_cache['data'] = df
+                _lof_realtime_cache['timestamp'] = current_time
+
+            if df is None or df.empty:
+                logger.warning(f"[实时行情] LOF实时行情数据为空(efinance)，跳过 {stock_code}")
+                return None
+
+            code_col = '股票代码' if '股票代码' in df.columns else 'code'
+            code_series = df[code_col].astype(str).str.zfill(6)
+            target_code = str(stock_code).strip().zfill(6)
+            row = df[code_series == target_code]
+            if row.empty:
+                logger.warning(f"[API返回] 未找到 LOF {stock_code} 的实时行情(efinance)")
+                return None
+
+            row = row.iloc[0]
+            name_col = '股票名称' if '股票名称' in df.columns else 'name'
+            price_col = '最新价' if '最新价' in df.columns else 'price'
+            pct_col = '涨跌幅' if '涨跌幅' in df.columns else 'pct_chg'
+            chg_col = '涨跌额' if '涨跌额' in df.columns else 'change'
+            vol_col = '成交量' if '成交量' in df.columns else 'volume'
+            amt_col = '成交额' if '成交额' in df.columns else 'amount'
+            turn_col = '换手率' if '换手率' in df.columns else 'turnover_rate'
+            amp_col = '振幅' if '振幅' in df.columns else 'amplitude'
+            high_col = '最高' if '最高' in df.columns else 'high'
+            low_col = '最低' if '最低' in df.columns else 'low'
+            open_col = '开盘' if '开盘' in df.columns else 'open'
+
+            quote = UnifiedRealtimeQuote(
+                code=target_code,
+                name=str(row.get(name_col, '')),
+                source=RealtimeSource.EFINANCE,
+                price=safe_float(row.get(price_col)),
+                change_pct=safe_float(row.get(pct_col)),
+                change_amount=safe_float(row.get(chg_col)),
+                volume=safe_int(row.get(vol_col)),
+                amount=safe_float(row.get(amt_col)),
+                turnover_rate=safe_float(row.get(turn_col)),
+                amplitude=safe_float(row.get(amp_col)),
+                high=safe_float(row.get(high_col)),
+                low=safe_float(row.get(low_col)),
+                open_price=safe_float(row.get(open_col)),
+            )
+
+            logger.info(
+                f"[LOF实时行情-efinance] {target_code} {quote.name}: "
+                f"价格={quote.price}, 涨跌={quote.change_pct}%, 换手率={quote.turnover_rate}%"
+            )
+            return quote
+        except Exception as e:
+            logger.error(f"[API错误] 获取 LOF {stock_code} 实时行情(efinance)失败: {e}")
             circuit_breaker.record_failure(source_key, str(e))
             return None
 

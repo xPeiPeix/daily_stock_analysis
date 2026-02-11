@@ -107,14 +107,25 @@ class YfinanceFetcher(BaseFetcher):
         # 去除可能的 .SH 后缀
         code = code.replace('.SH', '')
 
-        # A股：根据代码前缀判断市场
-        if code.startswith(('600', '601', '603', '688')):
+        # 根据代码前缀判断市场
+        # 沪市股票：600xxx, 601xxx, 603xxx, 688xxx (科创板)
+        # 沪市基金：51xxxx, 52xxxx, 56xxxx, 58xxxx (ETF), 501xxx-506xxx (LOF)
+        if code.startswith(('600', '601', '603', '688', '510', '511', '512', '513',
+                            '515', '516', '517', '518', '560', '561', '562', '563',
+                            '588', '501', '502', '503', '504', '505', '506')):
             return f"{code}.SS"
-        elif code.startswith(('000', '002', '300')):
+
+        # 深市股票：000xxx, 002xxx, 300xxx (创业板)
+        # 深市基金：159xxx (ETF), 16xxxx (LOF), 150xxx/151xxx (分级)
+        if code.startswith(('000', '002', '300', '159', '150', '151')):
             return f"{code}.SZ"
-        else:
-            logger.warning(f"无法确定股票 {code} 的市场，默认使用深市")
+
+        # 深市LOF基金：16xxxx (但不是159)
+        if code.startswith('16') and not code.startswith('159'):
             return f"{code}.SZ"
+
+        # 默认尝试深市（不再警告，因为可能是新类型）
+        return f"{code}.SZ"
     
     @retry(
         stop=stop_after_attempt(3),

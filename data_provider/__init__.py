@@ -19,6 +19,11 @@
 提示：优先级数字越小越优先，同优先级按初始化顺序排列
 """
 
+import logging
+
+# Reduce urllib3 retry warnings (e.g., from East Money connection issues)
+logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+
 from .base import BaseFetcher, DataFetcherManager
 from .efinance_fetcher import EfinanceFetcher
 from .akshare_fetcher import AkshareFetcher

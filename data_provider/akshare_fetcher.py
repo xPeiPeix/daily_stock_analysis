@@ -875,8 +875,18 @@ class AkshareFetcher(BaseFetcher):
         elif _is_hk_code(stock_code):
             return self._get_hk_realtime_quote(stock_code)
         elif _is_etf_code(stock_code):
+            # ETF: 新浪/腾讯也支持，优先使用
+            if source == "sina":
+                return self._get_stock_realtime_quote_sina(stock_code)
+            elif source == "tencent":
+                return self._get_stock_realtime_quote_tencent(stock_code)
             return self._get_etf_realtime_quote(stock_code)
         elif _is_lof_code(stock_code) or _is_other_fund_code(stock_code):
+            # LOF/分级基金: 新浪/腾讯也支持，优先使用（避免东方财富被封）
+            if source == "sina":
+                return self._get_stock_realtime_quote_sina(stock_code)
+            elif source == "tencent":
+                return self._get_stock_realtime_quote_tencent(stock_code)
             return self._get_lof_realtime_quote(stock_code)
         else:
             # 普通 A 股：根据 source 选择数据源
@@ -1307,28 +1317,42 @@ class AkshareFetcher(BaseFetcher):
                 df = _lof_realtime_cache['data']
                 logger.debug(f"[LOF实时行情] 使用缓存数据 (剩余 {int(_lof_realtime_cache['ttl'] - (current_time - _lof_realtime_cache['timestamp']))}s)")
             else:
-                # 防封禁策略
-                self._set_random_user_agent()
-                self._enforce_rate_limit()
+                last_error: Optional[Exception] = None
+                df = None
+                for attempt in range(1, 3):
+                    try:
+                        # 防封禁策略
+                        self._set_random_user_agent()
+                        self._enforce_rate_limit()
 
-                logger.info(f"[API调用] ak.fund_lof_spot_em() 获取LOF实时行情...")
-                import time as _time
-                api_start = _time.time()
+                        logger.info(f"[API调用] ak.fund_lof_spot_em() 获取LOF实时行情... (attempt {attempt}/2)")
+                        import time as _time
+                        api_start = _time.time()
 
-                df = ak.fund_lof_spot_em()
+                        df = ak.fund_lof_spot_em()
 
-                api_elapsed = _time.time() - api_start
-                logger.info(f"[API返回] ak.fund_lof_spot_em 成功: 返回 {len(df)} 只LOF, 耗时 {api_elapsed:.2f}s")
+                        api_elapsed = _time.time() - api_start
+                        logger.info(f"[API返回] ak.fund_lof_spot_em 成功: 返回 {len(df)} 只LOF, 耗时 {api_elapsed:.2f}s")
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"[API错误] ak.fund_lof_spot_em 获取失败 (attempt {attempt}/2): {e}")
+                        time.sleep(min(2 ** attempt, 5))
+
+                if df is None:
+                    logger.error(f"[API错误] ak.fund_lof_spot_em 最终失败: {last_error}")
+                    circuit_breaker.record_failure(source_key, str(last_error))
+                    df = pd.DataFrame()
 
                 # 更新缓存
                 _lof_realtime_cache['data'] = df
                 _lof_realtime_cache['timestamp'] = current_time
 
-            circuit_breaker.record_success(source_key)
-
             if df is None or df.empty:
                 logger.warning(f"[实时行情] LOF实时行情数据为空，跳过 {stock_code}")
                 return None
+
+            circuit_breaker.record_success(source_key)
 
             # 查找指定 LOF
             row = df[df['代码'] == stock_code]

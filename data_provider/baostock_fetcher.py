@@ -125,34 +125,45 @@ class BaostockFetcher(BaseFetcher):
     def _convert_stock_code(self, stock_code: str) -> str:
         """
         转换股票代码为 Baostock 格式
-        
+
         Baostock 要求的格式：
         - 沪市：sh.600519
         - 深市：sz.000001
-        
+
         Args:
             stock_code: 原始代码，如 '600519', '000001'
-            
+
         Returns:
             Baostock 格式代码，如 'sh.600519', 'sz.000001'
         """
         code = stock_code.strip()
-        
+
         # 已经包含前缀的情况
         if code.startswith(('sh.', 'sz.')):
             return code.lower()
-        
+
         # 去除可能的后缀
         code = code.replace('.SH', '').replace('.SZ', '').replace('.sh', '').replace('.sz', '')
-        
+
         # 根据代码前缀判断市场
-        if code.startswith(('600', '601', '603', '688')):
+        # 沪市股票：600xxx, 601xxx, 603xxx, 688xxx (科创板)
+        # 沪市基金：51xxxx, 52xxxx, 56xxxx, 58xxxx (ETF), 501xxx-506xxx (LOF)
+        if code.startswith(('600', '601', '603', '688', '510', '511', '512', '513',
+                            '515', '516', '517', '518', '560', '561', '562', '563',
+                            '588', '501', '502', '503', '504', '505', '506')):
             return f"sh.{code}"
-        elif code.startswith(('000', '002', '300')):
+
+        # 深市股票：000xxx, 002xxx, 300xxx (创业板)
+        # 深市基金：159xxx (ETF), 16xxxx (LOF), 150xxx/151xxx (分级)
+        if code.startswith(('000', '002', '300', '159', '150', '151')):
             return f"sz.{code}"
-        else:
-            logger.warning(f"无法确定股票 {code} 的市场，默认使用深市")
+
+        # 深市LOF基金：16xxxx (但不是159)
+        if code.startswith('16') and not code.startswith('159'):
             return f"sz.{code}"
+
+        # 默认尝试深市（不再警告，因为可能是新类型）
+        return f"sz.{code}"
     
     @retry(
         stop=stop_after_attempt(3),
