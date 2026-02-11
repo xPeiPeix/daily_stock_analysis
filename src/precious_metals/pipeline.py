@@ -369,6 +369,8 @@ class PreciousMetalsPipeline:
         return {
             "overview": overview,
             "results": results,
+            "news_contexts": news_contexts,  # Add news to return value
+            "macro_news": macro_news,
             "timestamp": datetime.now(),
         }
 
