@@ -94,42 +94,60 @@ class PreciousMetalsPipeline:
             metal_name = "黄金" if metal_type == MetalType.GOLD else "白银"
             metal_name_en = "gold" if metal_type == MetalType.GOLD else "silver"
 
-            # Search queries
+            # Enhanced search queries for precious metals
             queries = [
-                f"{metal_name}价格 行情分析",
-                f"{metal_name_en} price forecast",
-                "美联储 利率 黄金" if metal_type == MetalType.GOLD else "白银 工业需求",
+                f"{metal_name} 价格 走势 最新消息",
+                f"{metal_name_en} price forecast analysis",
             ]
 
+            # Add metal-specific queries
+            if metal_type == MetalType.GOLD:
+                queries.extend([
+                    "央行购金 黄金储备",
+                    "gold ETF holdings demand",
+                ])
+            else:
+                queries.extend([
+                    "白银 工业需求 光伏",
+                    "silver industrial demand solar",
+                ])
+
             all_results = []
-            for query in queries[:2]:  # Limit to 2 queries
+            for query in queries[:3]:  # Limit to 3 queries
                 try:
-                    results = self.search_service.search(query, max_results=3)
+                    results = self.search_service.search(query, max_results=3, days=7)
                     if results:
                         all_results.extend(results)
+                        logger.info(f"[News] '{query}' returned {len(results)} results")
                 except Exception as e:
                     logger.warning(f"Search failed for '{query}': {e}")
 
             if not all_results:
                 return None
 
-            # Format results
-            news_lines = []
+            # Format results - SearchResult is a dataclass, use attribute access
+            news_lines = [f"### {metal_name}相关新闻", ""]
             seen_titles = set()
-            for item in all_results[:5]:  # Limit to 5 results
-                title = item.get('title', '')
+            for item in all_results[:6]:  # Limit to 6 results
+                # SearchResult is a dataclass with attributes: title, snippet, url, source, published_date
+                title = item.title if hasattr(item, 'title') else item.get('title', '')
                 if title and title not in seen_titles:
                     seen_titles.add(title)
-                    snippet = item.get('snippet', item.get('content', ''))[:200]
-                    source = item.get('source', '')
-                    news_lines.append(f"- {title}")
+                    snippet = item.snippet if hasattr(item, 'snippet') else item.get('snippet', '')
+                    snippet = snippet[:200] if snippet else ''
+                    source = item.source if hasattr(item, 'source') else item.get('source', '')
+                    date = item.published_date if hasattr(item, 'published_date') else item.get('published_date', '')
+
+                    news_lines.append(f"- **{title}**")
+                    if date:
+                        news_lines.append(f"  日期: {date}")
                     if snippet:
                         news_lines.append(f"  {snippet}")
                     if source:
                         news_lines.append(f"  来源: {source}")
                     news_lines.append("")
 
-            return "\n".join(news_lines) if news_lines else None
+            return "\n".join(news_lines) if len(news_lines) > 2 else None
 
         except Exception as e:
             logger.error(f"News search failed for {metal_type.value}: {e}")
@@ -147,17 +165,20 @@ class PreciousMetalsPipeline:
 
         try:
             queries = [
-                "美联储 利率决议 黄金影响",
-                "美元指数 走势分析",
-                "通胀数据 贵金属",
+                "美联储 利率决议 货币政策",
+                "Federal Reserve interest rate decision",
+                "美元指数 DXY 走势",
+                "通胀 CPI 数据",
+                "地缘政治 风险 避险",
             ]
 
             all_results = []
-            for query in queries[:2]:
+            for query in queries[:3]:  # Limit to 3 queries
                 try:
-                    results = self.search_service.search(query, max_results=2)
+                    results = self.search_service.search(query, max_results=2, days=7)
                     if results:
                         all_results.extend(results)
+                        logger.info(f"[Macro] '{query}' returned {len(results)} results")
                 except Exception as e:
                     logger.warning(f"Macro search failed for '{query}': {e}")
 
@@ -166,14 +187,20 @@ class PreciousMetalsPipeline:
 
             news_lines = ["### 宏观经济新闻", ""]
             seen_titles = set()
-            for item in all_results[:4]:
-                title = item.get('title', '')
+            for item in all_results[:5]:
+                # SearchResult is a dataclass with attributes
+                title = item.title if hasattr(item, 'title') else item.get('title', '')
                 if title and title not in seen_titles:
                     seen_titles.add(title)
-                    snippet = item.get('snippet', item.get('content', ''))[:150]
-                    news_lines.append(f"- {title}")
+                    snippet = item.snippet if hasattr(item, 'snippet') else item.get('snippet', '')
+                    snippet = snippet[:150] if snippet else ''
+                    source = item.source if hasattr(item, 'source') else item.get('source', '')
+
+                    news_lines.append(f"- **{title}**")
                     if snippet:
                         news_lines.append(f"  {snippet}")
+                    if source:
+                        news_lines.append(f"  来源: {source}")
                     news_lines.append("")
 
             return "\n".join(news_lines) if len(news_lines) > 2 else None
