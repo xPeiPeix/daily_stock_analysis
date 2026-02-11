@@ -31,6 +31,150 @@ class TrendDirection(Enum):
 
 
 @dataclass
+class COTPositions:
+    """
+    CFTC COT Speculator Positions Data
+
+    Commitment of Traders report data for gold/silver futures.
+    Reports released every Friday, reflecting positions as of Tuesday.
+    """
+    metal_type: MetalType
+    report_date: str
+    long_positions: int
+    short_positions: int
+    net_positions: int
+    net_long_pct: float  # net long percentage = long/(long+short)*100
+    prev_net_positions: Optional[int] = None
+    weekly_change: Optional[int] = None
+
+    @property
+    def bias(self) -> str:
+        """
+        Macro directional bias based on net long percentage.
+        - >70%: strong_long (极度看涨)
+        - 55-70%: mild_long (温和看涨)
+        - 45-55%: neutral (中性)
+        - 30-45%: mild_short (温和看跌)
+        - <30%: strong_short (极度看跌)
+        """
+        if self.net_long_pct >= 70:
+            return "strong_long"
+        elif self.net_long_pct >= 55:
+            return "mild_long"
+        elif self.net_long_pct <= 30:
+            return "strong_short"
+        elif self.net_long_pct <= 45:
+            return "mild_short"
+        return "neutral"
+
+    @property
+    def bias_cn(self) -> str:
+        """Get bias in Chinese"""
+        mapping = {
+            "strong_long": "极度看涨",
+            "mild_long": "温和看涨",
+            "neutral": "中性",
+            "mild_short": "温和看跌",
+            "strong_short": "极度看跌",
+        }
+        return mapping.get(self.bias, "未知")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            "metal_type": self.metal_type.value,
+            "report_date": self.report_date,
+            "long_positions": self.long_positions,
+            "short_positions": self.short_positions,
+            "net_positions": self.net_positions,
+            "net_long_pct": self.net_long_pct,
+            "prev_net_positions": self.prev_net_positions,
+            "weekly_change": self.weekly_change,
+            "bias": self.bias,
+            "bias_cn": self.bias_cn,
+        }
+
+
+@dataclass
+class OISignal:
+    """
+    Price + Open Interest Change Signal
+
+    Combines price movement with OI changes to determine market sentiment:
+    - Price↑ + OI↑ → new_longs (多开): New long positions entering
+    - Price↑ + OI↓ → short_covering (空平): Shorts exiting
+    - Price↓ + OI↑ → new_shorts (空开): New short positions entering
+    - Price↓ + OI↓ → long_liquidation (多平): Longs exiting
+    """
+    metal_type: MetalType
+    price_change: float
+    price_change_pct: float
+    oi_current: int
+    oi_prev: int
+    oi_change: int
+    oi_change_pct: float
+
+    @property
+    def signal_type(self) -> str:
+        """
+        Determine signal type based on price and OI changes.
+        Uses thresholds: price 0.1%, OI 0.5%
+        """
+        price_up = self.price_change_pct > 0.1
+        price_down = self.price_change_pct < -0.1
+        oi_up = self.oi_change_pct > 0.5
+        oi_down = self.oi_change_pct < -0.5
+
+        if price_up and oi_up:
+            return "new_longs"
+        elif price_up and oi_down:
+            return "short_covering"
+        elif price_down and oi_up:
+            return "new_shorts"
+        elif price_down and oi_down:
+            return "long_liquidation"
+        return "neutral"
+
+    @property
+    def signal_cn(self) -> str:
+        """Get signal description in Chinese"""
+        mapping = {
+            "new_longs": "多开（新多头入场）",
+            "short_covering": "空平（空头平仓）",
+            "new_shorts": "空开（新空头入场）",
+            "long_liquidation": "多平（多头平仓）",
+            "neutral": "持仓观望",
+        }
+        return mapping.get(self.signal_type, "未知")
+
+    @property
+    def signal_emoji(self) -> str:
+        """Get signal emoji"""
+        mapping = {
+            "new_longs": "🟢",
+            "short_covering": "🟡",
+            "new_shorts": "🔴",
+            "long_liquidation": "🟡",
+            "neutral": "⚪",
+        }
+        return mapping.get(self.signal_type, "⚪")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary"""
+        return {
+            "metal_type": self.metal_type.value,
+            "price_change": self.price_change,
+            "price_change_pct": self.price_change_pct,
+            "oi_current": self.oi_current,
+            "oi_prev": self.oi_prev,
+            "oi_change": self.oi_change,
+            "oi_change_pct": self.oi_change_pct,
+            "signal_type": self.signal_type,
+            "signal_cn": self.signal_cn,
+        }
+
+
+@dataclass
 class MetalQuote:
     """
     Price data for a precious metal
@@ -174,6 +318,8 @@ class PreciousMetalsOverview:
     - Gold and Silver quotes
     - Correlation indicators (USD, yields, etc.)
     - Gold/Silver ratio
+    - COT positions (macro sentiment)
+    - OI signals (micro sentiment)
     - Market summary
     """
     # Metal quotes
@@ -187,6 +333,14 @@ class PreciousMetalsOverview:
     # Calculated metrics
     gold_silver_ratio: Optional[float] = None  # Gold price / Silver price
     gold_silver_ratio_change: Optional[float] = None
+
+    # COT positions (macro sentiment)
+    gold_cot: Optional['COTPositions'] = None
+    silver_cot: Optional['COTPositions'] = None
+
+    # OI signals (micro sentiment)
+    gold_oi_signal: Optional['OISignal'] = None
+    silver_oi_signal: Optional['OISignal'] = None
 
     # Metadata
     timestamp: Optional[datetime] = None
@@ -217,6 +371,10 @@ class PreciousMetalsOverview:
             "treasury_10y": self.treasury_10y.to_dict() if self.treasury_10y else None,
             "gold_silver_ratio": self.gold_silver_ratio,
             "gold_silver_ratio_status": self.gold_silver_ratio_status,
+            "gold_cot": self.gold_cot.to_dict() if self.gold_cot else None,
+            "silver_cot": self.silver_cot.to_dict() if self.silver_cot else None,
+            "gold_oi_signal": self.gold_oi_signal.to_dict() if self.gold_oi_signal else None,
+            "silver_oi_signal": self.silver_oi_signal.to_dict() if self.silver_oi_signal else None,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "data_complete": self.data_complete,
         }
@@ -255,6 +413,11 @@ class PreciousMetalsAnalysisResult:
     # Trend prediction
     short_term_outlook: str = ""  # 1-3 days
     medium_term_outlook: str = ""  # 1-2 weeks
+
+    # Operation advice by timeframe
+    ultra_short_advice: str = ""  # 超短线（日内/隔日）
+    short_term_advice: str = ""   # 短期（1-2天）
+    medium_term_advice: str = ""  # 中期（1-2周）
 
     # Risk and catalysts
     risk_warning: str = ""
@@ -319,6 +482,9 @@ class PreciousMetalsAnalysisResult:
             "resistance_levels": self.resistance_levels,
             "short_term_outlook": self.short_term_outlook,
             "medium_term_outlook": self.medium_term_outlook,
+            "ultra_short_advice": self.ultra_short_advice,
+            "short_term_advice": self.short_term_advice,
+            "medium_term_advice": self.medium_term_advice,
             "risk_warning": self.risk_warning,
             "positive_catalysts": self.positive_catalysts,
             "negative_catalysts": self.negative_catalysts,

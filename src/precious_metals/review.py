@@ -21,6 +21,8 @@ from src.precious_metals.models import (
     MetalType,
     PreciousMetalsOverview,
     PreciousMetalsAnalysisResult,
+    COTPositions,
+    OISignal,
 )
 from src.precious_metals.pipeline import PreciousMetalsPipeline
 from src.precious_metals.analyzer import PreciousMetalsAIAnalyzer
@@ -138,6 +140,79 @@ def generate_precious_metals_report(
 
     report_lines.append("")
 
+    # COT positions section
+    if overview.gold_cot or overview.silver_cot:
+        # Get report date and clean format
+        report_date = overview.gold_cot.report_date if overview.gold_cot else overview.silver_cot.report_date
+        if 'T' in report_date:
+            report_date = report_date.split('T')[0]
+
+        # Calculate delay days
+        try:
+            cot_date_obj = datetime.strptime(report_date, '%Y-%m-%d')
+            delay_days = (datetime.now() - cot_date_obj).days
+            delay_text = f"距今 {delay_days} 天"
+        except ValueError:
+            delay_text = "约3-8天延迟"
+
+        report_lines.extend([
+            "## 📈 CFTC 投机者持仓 (历史参考)",
+            "",
+            f"> ⚠️ **滞后数据**: 截至 {report_date}，{delay_text}。COT报告每周五发布，反映周二持仓，仅供宏观情绪参考。",
+            "",
+            "| 品种 | 多头 | 空头 | 净持仓 | 多头占比 | 历史偏向 |",
+            "|------|------|------|--------|----------|----------|",
+        ])
+
+        if overview.gold_cot:
+            cot = overview.gold_cot
+            report_lines.append(
+                f"| 黄金 | {cot.long_positions:,} | {cot.short_positions:,} | "
+                f"{cot.net_positions:+,} | {cot.net_long_pct:.1f}% | {cot.bias_cn} |"
+            )
+
+        if overview.silver_cot:
+            cot = overview.silver_cot
+            report_lines.append(
+                f"| 白银 | {cot.long_positions:,} | {cot.short_positions:,} | "
+                f"{cot.net_positions:+,} | {cot.net_long_pct:.1f}% | {cot.bias_cn} |"
+            )
+
+        report_lines.append("")
+
+    # OI signals section
+    if overview.gold_oi_signal or overview.silver_oi_signal:
+        report_lines.extend([
+            "## 🔄 价格+持仓信号",
+            "",
+            "| 品种 | 价格变化 | OI变化 | 信号 |",
+            "|------|----------|--------|------|",
+        ])
+
+        if overview.gold_oi_signal:
+            sig = overview.gold_oi_signal
+            report_lines.append(
+                f"| 🥇 黄金 | {sig.price_change_pct:+.2f}% | {sig.oi_change_pct:+.2f}% | "
+                f"{sig.signal_emoji} **{sig.signal_cn}** |"
+            )
+
+        if overview.silver_oi_signal:
+            sig = overview.silver_oi_signal
+            report_lines.append(
+                f"| 🥈 白银 | {sig.price_change_pct:+.2f}% | {sig.oi_change_pct:+.2f}% | "
+                f"{sig.signal_emoji} **{sig.signal_cn}** |"
+            )
+
+        report_lines.extend([
+            "",
+            "> **信号解读**：",
+            "> - 多开：价格↑ + OI↑ = 新多头入场（趋势可能延续）",
+            "> - 空平：价格↑ + OI↓ = 空头平仓（止损或获利，上涨动能可能减弱）",
+            "> - 空开：价格↓ + OI↑ = 新空头入场（趋势可能延续）",
+            "> - 多平：价格↓ + OI↓ = 多头平仓（止损或获利，下跌动能可能减弱）",
+            "",
+        ])
+
     # Analysis sections for each metal
     for metal_type in [MetalType.GOLD, MetalType.SILVER]:
         if metal_type not in results:
@@ -203,6 +278,20 @@ def generate_precious_metals_report(
                 report_lines.append(f"**短期 (1-3日)**: {result.short_term_outlook}")
             if result.medium_term_outlook:
                 report_lines.append(f"**中期 (1-2周)**: {result.medium_term_outlook}")
+            report_lines.append("")
+
+        # Operation advice by timeframe
+        if result.ultra_short_advice or result.short_term_advice or result.medium_term_advice:
+            report_lines.extend([
+                "### 🎯 分周期操作建议",
+                "",
+            ])
+            if result.ultra_short_advice:
+                report_lines.append(f"**⚡ 超短线（日内/隔日）**: {result.ultra_short_advice}")
+            if result.short_term_advice:
+                report_lines.append(f"**📅 短期（1-2天）**: {result.short_term_advice}")
+            if result.medium_term_advice:
+                report_lines.append(f"**📆 中期（1-2周）**: {result.medium_term_advice}")
             report_lines.append("")
 
         # Catalysts

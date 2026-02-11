@@ -40,6 +40,8 @@ from src.precious_metals.models import (
     MetalQuote,
     CorrelationIndicator,
     PreciousMetalsOverview,
+    COTPositions,
+    OISignal,
 )
 
 logger = logging.getLogger(__name__)
@@ -553,6 +555,257 @@ class PreciousMetalsFetcher:
             logger.error(f"Failed to fetch 10Y Treasury: {e}")
             return None
 
+    def get_cftc_cot_positions(self, metal_type: MetalType) -> Optional[COTPositions]:
+        """
+        Fetch CFTC COT (Commitment of Traders) speculator positions
+
+        Data source: CFTC Public Reporting API
+        URL: https://publicreporting.cftc.gov/resource/6dca-aqww.json
+
+        COT reports are released every Friday, reflecting positions as of Tuesday.
+        There's a 3-day data delay.
+
+        Args:
+            metal_type: GOLD or SILVER
+
+        Returns:
+            COTPositions with speculator long/short positions
+        """
+        cache_key = f"cot_{metal_type.value}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        try:
+            import httpx
+
+            commodity_name = "GOLD" if metal_type == MetalType.GOLD else "SILVER"
+            url = "https://publicreporting.cftc.gov/resource/6dca-aqww.json"
+
+            params = {
+                "$where": f"commodity_name='{commodity_name}'",
+                "$order": "report_date_as_yyyy_mm_dd DESC",
+                "$limit": 2,  # Get current and previous week
+            }
+
+            with httpx.Client(timeout=30) as client:
+                response = client.get(url, params=params)
+
+            if response.status_code != 200:
+                logger.warning(f"CFTC API returned {response.status_code}")
+                return None
+
+            data = response.json()
+            if not data:
+                logger.warning(f"No COT data for {commodity_name}")
+                return None
+
+            # Find the main contract (highest open interest)
+            latest_date = data[0].get("report_date_as_yyyy_mm_dd", "")
+            latest_records = [r for r in data if r.get("report_date_as_yyyy_mm_dd") == latest_date]
+
+            if not latest_records:
+                logger.warning(f"No records for latest date")
+                return None
+
+            # Pick record with highest open interest
+            record = max(latest_records, key=lambda r: int(r.get("open_interest_all", 0) or 0))
+
+            # Extract speculator (non-commercial) positions
+            long_positions = int(record.get("noncomm_positions_long_all", 0) or 0)
+            short_positions = int(record.get("noncomm_positions_short_all", 0) or 0)
+            net_positions = long_positions - short_positions
+
+            total_positions = long_positions + short_positions
+            net_long_pct = (long_positions / total_positions * 100) if total_positions > 0 else 50
+
+            # Try to get previous week's data
+            prev_net = None
+            weekly_change = None
+            if len(data) >= 2:
+                prev_date = data[1].get("report_date_as_yyyy_mm_dd", "")
+                prev_records = [r for r in data if r.get("report_date_as_yyyy_mm_dd") == prev_date]
+                if prev_records:
+                    prev_record = max(prev_records, key=lambda r: int(r.get("open_interest_all", 0) or 0))
+                    prev_long = int(prev_record.get("noncomm_positions_long_all", 0) or 0)
+                    prev_short = int(prev_record.get("noncomm_positions_short_all", 0) or 0)
+                    prev_net = prev_long - prev_short
+                    weekly_change = net_positions - prev_net
+
+            cot = COTPositions(
+                metal_type=metal_type,
+                report_date=latest_date,
+                long_positions=long_positions,
+                short_positions=short_positions,
+                net_positions=net_positions,
+                net_long_pct=net_long_pct,
+                prev_net_positions=prev_net,
+                weekly_change=weekly_change,
+            )
+
+            # Cache for 24 hours (COT updates weekly)
+            self._cache[cache_key] = (cot, datetime.now())
+            logger.info(
+                f"Fetched COT for {metal_type.value}: "
+                f"Net={net_positions:+,} ({net_long_pct:.1f}% long) [{cot.bias_cn}]"
+            )
+            return cot
+
+        except ImportError:
+            logger.warning("httpx not installed, COT data unavailable")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to fetch COT for {metal_type.value}: {e}")
+            return None
+
+    def get_open_interest(self, metal_type: MetalType) -> Optional[Dict[str, Any]]:
+        """
+        Fetch Open Interest data
+
+        Priority:
+        1. AkShare (Shanghai futures) - for domestic OI
+        2. YFinance - for COMEX OI (fallback)
+
+        Args:
+            metal_type: GOLD or SILVER
+
+        Returns:
+            Dict with OI data: {current, prev, change, change_pct}
+        """
+        cache_key = f"oi_{metal_type.value}"
+        cached = self._get_cached(cache_key)
+        if cached:
+            return cached
+
+        # Try AkShare first (Shanghai futures)
+        if self._akshare_available:
+            try:
+                import akshare as ak
+
+                symbol = AKSHARE_SYMBOLS[metal_type]
+                df = ak.futures_main_sina(symbol=symbol)
+
+                if df is not None and not df.empty and '持仓量' in df.columns:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-2] if len(df) > 1 else latest
+
+                    oi_current = int(latest['持仓量']) if latest['持仓量'] else 0
+                    oi_prev = int(prev['持仓量']) if prev['持仓量'] else oi_current
+
+                    if oi_current > 0:
+                        oi_change = oi_current - oi_prev
+                        oi_change_pct = (oi_change / oi_prev * 100) if oi_prev > 0 else 0
+
+                        result = {
+                            "current": oi_current,
+                            "prev": oi_prev,
+                            "change": oi_change,
+                            "change_pct": oi_change_pct,
+                            "source": "AkShare",
+                        }
+
+                        self._set_cached(cache_key, result)
+                        logger.info(
+                            f"Fetched OI for {metal_type.value} from AkShare: "
+                            f"{oi_current:,} ({oi_change_pct:+.2f}%)"
+                        )
+                        return result
+
+            except Exception as e:
+                logger.warning(f"AkShare OI fetch failed for {metal_type.value}: {e}")
+
+        # Fallback to YFinance
+        if self._yfinance_available:
+            try:
+                import yfinance as yf
+
+                symbol = YFINANCE_SYMBOLS[metal_type]
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+
+                oi_current = info.get('openInterest')
+                if oi_current and oi_current > 0:
+                    # YFinance doesn't provide historical OI easily
+                    # Use a simple estimate based on volume changes
+                    hist = ticker.history(period="5d")
+                    if not hist.empty and len(hist) > 1:
+                        # Estimate prev OI based on volume ratio
+                        vol_ratio = hist['Volume'].iloc[-2] / hist['Volume'].iloc[-1] if hist['Volume'].iloc[-1] > 0 else 1
+                        oi_prev = int(oi_current * vol_ratio)
+                        oi_change = oi_current - oi_prev
+                        oi_change_pct = (oi_change / oi_prev * 100) if oi_prev > 0 else 0
+                    else:
+                        oi_prev = oi_current
+                        oi_change = 0
+                        oi_change_pct = 0
+
+                    result = {
+                        "current": oi_current,
+                        "prev": oi_prev,
+                        "change": oi_change,
+                        "change_pct": oi_change_pct,
+                        "source": "YFinance (估算)",
+                    }
+
+                    self._set_cached(cache_key, result)
+                    logger.info(
+                        f"Fetched OI for {metal_type.value} from YFinance: "
+                        f"{oi_current:,} ({oi_change_pct:+.2f}%)"
+                    )
+                    return result
+
+            except Exception as e:
+                logger.warning(f"YFinance OI fetch failed for {metal_type.value}: {e}")
+
+        logger.warning(f"Could not fetch OI for {metal_type.value}")
+        return None
+
+    def calculate_oi_signal(
+        self,
+        metal_type: MetalType,
+        quote: MetalQuote
+    ) -> Optional[OISignal]:
+        """
+        Calculate Price + OI combined signal
+
+        Signal logic:
+        - Price↑ + OI↑ → new_longs (多开): Bullish continuation
+        - Price↑ + OI↓ → short_covering (空平): Rally may slow
+        - Price↓ + OI↑ → new_shorts (空开): Bearish continuation
+        - Price↓ + OI↓ → long_liquidation (多平): Decline may slow
+
+        Args:
+            metal_type: GOLD or SILVER
+            quote: MetalQuote with price data
+
+        Returns:
+            OISignal with combined analysis
+        """
+        oi_data = self.get_open_interest(metal_type)
+        if not oi_data:
+            return None
+
+        # Get price change
+        price_change = quote.intl_change if quote.intl_change is not None else 0
+        price_change_pct = quote.intl_change_pct if quote.intl_change_pct is not None else 0
+
+        signal = OISignal(
+            metal_type=metal_type,
+            price_change=price_change,
+            price_change_pct=price_change_pct,
+            oi_current=oi_data["current"],
+            oi_prev=oi_data["prev"],
+            oi_change=oi_data["change"],
+            oi_change_pct=oi_data["change_pct"],
+        )
+
+        logger.info(
+            f"OI Signal for {metal_type.value}: "
+            f"Price {price_change_pct:+.2f}% + OI {oi_data['change_pct']:+.2f}% → {signal.signal_cn}"
+        )
+
+        return signal
+
     def get_precious_metals_overview(self) -> PreciousMetalsOverview:
         """
         Get complete precious metals market overview
@@ -633,6 +886,16 @@ class PreciousMetalsFetcher:
             timestamp=datetime.now(),
             data_complete=data_complete,
         )
+
+        # Fetch COT positions (macro sentiment)
+        overview.gold_cot = self.get_cftc_cot_positions(MetalType.GOLD)
+        overview.silver_cot = self.get_cftc_cot_positions(MetalType.SILVER)
+
+        # Calculate OI signals (micro sentiment)
+        if gold:
+            overview.gold_oi_signal = self.calculate_oi_signal(MetalType.GOLD, gold)
+        if silver:
+            overview.silver_oi_signal = self.calculate_oi_signal(MetalType.SILVER, silver)
 
         logger.info(f"Precious metals overview complete. Data complete: {data_complete}")
         return overview
