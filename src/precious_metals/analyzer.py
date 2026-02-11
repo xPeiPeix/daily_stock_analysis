@@ -643,7 +643,9 @@ class PreciousMetalsAIAnalyzer:
             if silver_oi:
                 prompt += f"| 白银 | {silver_oi.price_change_pct:+.2f}% | {silver_oi.oi_change_pct:+.2f}% | {silver_oi.signal_emoji} {silver_oi.signal_cn} |\n"
 
-            prompt += """
+            prompt += f"""
+> **数据说明**: 价格变化=COMEX国际市场，OI变化=上海期货（沪金/沪银），两市场走势通常同步但可能存在差异
+>
 > **信号解读**：
 > - 多开=新多头入场（趋势可能延续）
 > - 空平=空头平仓（止损或获利，上涨动能可能减弱）
