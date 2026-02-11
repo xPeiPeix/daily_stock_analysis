@@ -286,12 +286,13 @@ class DataFetcherManager:
     def __init__(self, fetchers: Optional[List[BaseFetcher]] = None):
         """
         初始化管理器
-        
+
         Args:
             fetchers: 数据源列表（可选，默认按优先级自动创建）
         """
         self._fetchers: List[BaseFetcher] = []
-        
+        self._quota_exhausted: Dict[str, bool] = {}  # Track exhausted providers
+
         if fetchers:
             # 按优先级排序
             self._fetchers = sorted(fetchers, key=lambda f: f.priority)
@@ -319,9 +320,12 @@ class DataFetcherManager:
 
         config = get_config()
 
-        # 创建所有数据源实例
+        # 创建所有数据源实例（从配置读取流控参数）
         efinance = EfinanceFetcher()
-        akshare = AkshareFetcher()
+        akshare = AkshareFetcher(
+            sleep_min=config.akshare_sleep_min,
+            sleep_max=config.akshare_sleep_max
+        )
         pytdx = PytdxFetcher()      # 通达信数据源
         baostock = BaostockFetcher()
         yfinance = YfinanceFetcher()
@@ -376,8 +380,13 @@ class DataFetcherManager:
             DataFetchError: 所有数据源都失败时抛出
         """
         errors = []
-        
+
         for fetcher in self._fetchers:
+            # Skip exhausted providers (e.g., Tushare quota exceeded)
+            if self._quota_exhausted.get(fetcher.name, False):
+                logger.debug(f"[跳过] {fetcher.name} 配额已耗尽")
+                continue
+
             try:
                 logger.info(f"尝试使用 [{fetcher.name}] 获取 {stock_code}...")
                 df = fetcher.get_daily_data(
@@ -386,18 +395,26 @@ class DataFetcherManager:
                     end_date=end_date,
                     days=days
                 )
-                
+
                 if df is not None and not df.empty:
                     logger.info(f"[{fetcher.name}] 成功获取 {stock_code}")
                     return df, fetcher.name
-                    
+
+            except RateLimitError as e:
+                # Mark provider as exhausted for this session
+                self._quota_exhausted[fetcher.name] = True
+                error_msg = f"[{fetcher.name}] 配额耗尽，本次运行不再使用: {e}"
+                logger.warning(error_msg)
+                errors.append(error_msg)
+                continue
+
             except Exception as e:
                 error_msg = f"[{fetcher.name}] 失败: {str(e)}"
                 logger.warning(error_msg)
                 errors.append(error_msg)
                 # 继续尝试下一个数据源
                 continue
-        
+
         # 所有数据源都失败
         error_summary = f"所有数据源获取 {stock_code} 失败:\n" + "\n".join(errors)
         logger.error(error_summary)

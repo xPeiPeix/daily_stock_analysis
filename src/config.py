@@ -413,7 +413,10 @@ class Config:
             # - tushare: Tushare Pro，需要2000积分，数据全面
             realtime_source_priority=cls._resolve_realtime_source_priority(),
             realtime_cache_ttl=int(os.getenv('REALTIME_CACHE_TTL', '600')),
-            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300'))
+            circuit_breaker_cooldown=int(os.getenv('CIRCUIT_BREAKER_COOLDOWN', '300')),
+            # 流控配置
+            akshare_sleep_min=float(os.getenv('AKSHARE_SLEEP_MIN', '2.0')),
+            akshare_sleep_max=float(os.getenv('AKSHARE_SLEEP_MAX', '5.0')),
         )
     
     @classmethod
