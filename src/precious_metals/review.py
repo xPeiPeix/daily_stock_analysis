@@ -217,9 +217,25 @@ def generate_precious_metals_report(
             "",
         ])
 
-    # News section
-    has_news = (news_contexts and any(news_contexts.values())) or macro_news
-    if has_news:
+    # News section - 优先使用 AI 返回的 news_summary，fallback 到原始搜索结果
+    ai_news_summaries = []
+    for metal_type in [MetalType.GOLD, MetalType.SILVER]:
+        if metal_type in results and results[metal_type].news_summary:
+            ai_news_summaries.append((metal_type, results[metal_type].news_summary))
+
+    if ai_news_summaries:
+        # 使用 AI 清理后的新闻摘要
+        report_lines.extend([
+            "## 📰 市场新闻动态",
+            "",
+        ])
+        for metal_type, summary in ai_news_summaries:
+            metal_name = "🥇 黄金" if metal_type == MetalType.GOLD else "🥈 白银"
+            report_lines.append(f"### {metal_name}相关")
+            report_lines.append(summary)
+            report_lines.append("")
+    elif (news_contexts and any(news_contexts.values())) or macro_news:
+        # Fallback: 使用原始搜索结果（已经过清理函数处理）
         report_lines.extend([
             "## 📰 市场新闻动态",
             "",

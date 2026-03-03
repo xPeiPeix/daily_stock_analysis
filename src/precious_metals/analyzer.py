@@ -659,6 +659,8 @@ class PreciousMetalsAIAnalyzer:
 ## 📰 市场新闻
 """
         if news_context:
+            import re
+            safe_news = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'[\1]', news_context)
             prompt += f"""
 以下是近期贵金属相关新闻，请重点提取：
 1. 🏦 **央行动态**：各国央行购金/售金
@@ -666,9 +668,7 @@ class PreciousMetalsAIAnalyzer:
 3. 🌍 **地缘政治**：战争、制裁、危机
 4. 💵 **美联储政策**：加息/降息预期
 
-```
-{news_context}
-```
+{safe_news}
 """
         else:
             prompt += """

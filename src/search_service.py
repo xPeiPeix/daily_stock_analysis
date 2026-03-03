@@ -55,6 +55,103 @@ def fetch_url_content(url: str, timeout: int = 5) -> str:
     return ""
 
 
+def clean_news_content(text: str) -> str:
+    """
+    清理新闻内容，去除广告、导航、表格等垃圾信息
+
+    Args:
+        text: 原始文本
+
+    Returns:
+        清理后的文本
+    """
+    if not text:
+        return ""
+
+    import re
+
+    # 1. 移除常见的网站导航/广告模式
+    garbage_patterns = [
+        r'打开应用程序.*?热门搜索',
+        r'English \([^)]+\)',
+        r'\| Calendar GMT \|.*',  # 表格头及其后内容
+        r'--- ---.*',  # Markdown表格
+        r'Image \d+',  # 图片占位符
+        r'Advertisement.*?continue',
+        r'Sign in.*?Mail',
+        r'热门搜索.*?劲爆优惠',
+        r'首页\s*>.*?更多',
+        r'黄金行情.*?实物黄金价格',  # 网站导航菜单
+        r'全球央行.*?三大央行課程',  # 导航菜单
+        r'\| 名称 \| 最新价 \|.*',  # 股票表格
+        r'Terms\s*Privacy.*?Feedback',
+        r'© \d{4} All rights reserved',
+        r'About our ads.*?Careers',
+        r'劲爆优惠\d+%',
+        # 中文导航菜单
+        r'黄金行情\s*黄金报价\s*最新黄金价格.*?国际黄金价格',
+        r'白银开户',
+        r'中信期货',
+        # 英文导航
+        r'Yahoo Finance.*?Sign in',
+        r'From [\w\']+ [\w\']+\s*Traders work on',
+    ]
+
+    for pattern in garbage_patterns:
+        text = re.sub(pattern, ' ', text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. 移除过多的管道符号（通常是表格残留）
+    text = re.sub(r'\|[^|\n]{0,30}\|', ' ', text)
+    text = re.sub(r'\|', ' ', text)
+
+    # 3. 移除URL
+    text = re.sub(r'https?://\S+', '', text)
+
+    # 4. 移除连续的特殊字符
+    text = re.sub(r'[-=_]{3,}', ' ', text)
+
+    # 5. 移除短词片段（单独的1-2个字）
+    text = re.sub(r'\s+[\u4e00-\u9fa5]{1,2}\s+', ' ', text)
+
+    # 6. 清理多余空白
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # 7. 如果清理后内容太短（可能误删了），返回空
+    if len(text) < 30:
+        return ""
+
+    return text
+
+
+def clean_news_title(title: str) -> str:
+    """
+    清理新闻标题，去除网站后缀
+
+    Args:
+        title: 原始标题
+
+    Returns:
+        清理后的标题
+    """
+    if not title:
+        return ""
+
+    import re
+
+    # 移除常见的网站后缀模式
+    suffixes = [
+        r'\s*[-_|–—]\s*(汇通网|新浪财经|东方财富|金投网|英为财情|Investing\.com|CNN|Reuters|Yahoo Finance|Bloomberg|CNBC|MacroMicro|Trading Economics|CoinCodex).*$',
+        r'\s*[-_|–—]\s*[A-Za-z][A-Za-z0-9\.\-]*\.(com|cn|net|org|io).*$',  # 域名后缀
+        r'\s*[-_|–—]\s*[\u4e00-\u9fa5]+网.*$',  # 中文网站名
+        r'\s*\|\s*[A-Za-z\u4e00-\u9fa5]+$',
+    ]
+
+    for suffix in suffixes:
+        title = re.sub(suffix, '', title, flags=re.IGNORECASE)
+
+    return title.strip()
+
+
 @dataclass
 class SearchResult:
     """搜索结果数据类"""
@@ -235,27 +332,40 @@ class TavilySearchProvider(BaseSearchProvider):
         
         try:
             client = TavilyClient(api_key=api_key)
-            
-            # 执行搜索（优化：使用advanced深度、限制最近几天）
+
+            # 执行搜索（优化：使用advanced深度、获取完整内容）
             response = client.search(
                 query=query,
                 search_depth="advanced",  # advanced 获取更多结果
                 max_results=max_results,
                 include_answer=False,
-                include_raw_content=False,
+                include_raw_content=True,  # 获取完整内容
                 days=days,  # 搜索最近天数的内容
             )
-            
+
             # 记录原始响应到日志
             logger.info(f"[Tavily] 搜索完成，query='{query}', 返回 {len(response.get('results', []))} 条结果")
             logger.debug(f"[Tavily] 原始响应: {response}")
-            
+
             # 解析结果
             results = []
             for item in response.get('results', []):
+                # 优先使用 raw_content，fallback 到 content
+                raw_content = item.get('raw_content', '')
+                content = item.get('content', '')
+
+                # 选择更好的内容源
+                if raw_content and len(raw_content) > len(content):
+                    snippet = clean_news_content(raw_content)[:800]
+                else:
+                    snippet = clean_news_content(content)[:500]
+
+                # 清理标题
+                title = clean_news_title(item.get('title', ''))
+
                 results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=item.get('content', '')[:500],  # 截取前500字
+                    title=title,
+                    snippet=snippet,
                     url=item.get('url', ''),
                     source=self._extract_domain(item.get('url', '')),
                     published_date=item.get('published_date'),
@@ -442,29 +552,32 @@ class SerpAPISearchProvider(BaseSearchProvider):
 
             for item in organic_results[:max_results]:
                 link = item.get('link', '')
-                snippet = item.get('snippet', '')
+                raw_snippet = item.get('snippet', '')
 
                 # 增强：如果需要，解析网页正文
                 # 策略：如果摘要太短，或者为了获取更多信息，可以请求网页
-                # 这里我们对所有结果尝试获取正文，但为了性能，仅获取前1000字符
                 content = ""
                 if link:
                    try:
                        fetched_content = fetch_url_content(link, timeout=5)
                        if fetched_content:
-                           # 如果获取到了正文，将其拼接到 snippet 中，或者替换 snippet
-                           # 这里选择拼接，保留原摘要
-                           content = fetched_content
-                           if len(content) > 500:
-                               snippet = f"{snippet}\n\n【网页详情】\n{content[:500]}..."
-                           else:
-                               snippet = f"{snippet}\n\n【网页详情】\n{content}"
+                           # 获取到正文后，清理并使用
+                           content = clean_news_content(fetched_content)
                    except Exception as e:
                        logger.debug(f"[SerpAPI] Fetch content failed: {e}")
 
+                # 选择最好的内容源
+                if content and len(content) > len(raw_snippet):
+                    snippet = content[:800]
+                else:
+                    snippet = clean_news_content(raw_snippet)[:500]
+
+                # 清理标题
+                title = clean_news_title(item.get('title', ''))
+
                 results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=snippet[:1000], # 限制总长度
+                    title=title,
+                    snippet=snippet,
                     url=link,
                     source=item.get('source', self._extract_domain(link)),
                     published_date=item.get('date'),
@@ -590,9 +703,14 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
             logger.info(f"[DuckDuckGo] 新闻搜索完成，返回 {len(search_results)} 条结果")
 
             for item in search_results:
+                # 清理内容和标题
+                raw_body = item.get('body', '')
+                snippet = clean_news_content(raw_body)[:500] if raw_body else ''
+                title = clean_news_title(item.get('title', ''))
+
                 results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=item.get('body', '')[:500],
+                    title=title,
+                    snippet=snippet,
                     url=item.get('url', ''),
                     source=item.get('source', self._extract_domain(item.get('url', ''))),
                     published_date=item.get('date'),
@@ -640,9 +758,14 @@ class DuckDuckGoSearchProvider(BaseSearchProvider):
         if search_results:
             logger.info(f"[DuckDuckGo] 文本搜索成功，返回 {len(search_results)} 条结果")
             for item in search_results:
+                # 清理内容和标题
+                raw_body = item.get('body', '')
+                snippet = clean_news_content(raw_body)[:500] if raw_body else ''
+                title = clean_news_title(item.get('title', ''))
+
                 results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=item.get('body', '')[:500],
+                    title=title,
+                    snippet=snippet,
                     url=item.get('href', ''),
                     source=self._extract_domain(item.get('href', '')),
                 ))
@@ -803,17 +926,17 @@ class BochaSearchProvider(BaseSearchProvider):
             results = []
             web_pages = data.get('data', {}).get('webPages', {})
             value_list = web_pages.get('value', [])
-            
+
             for item in value_list[:max_results]:
                 # 优先使用summary（AI摘要），fallback到snippet
-                snippet = item.get('summary') or item.get('snippet', '')
-                
-                # 截取摘要长度
-                if snippet:
-                    snippet = snippet[:500]
-                
+                raw_snippet = item.get('summary') or item.get('snippet', '')
+
+                # 清理内容和标题
+                snippet = clean_news_content(raw_snippet)[:500] if raw_snippet else ''
+                title = clean_news_title(item.get('name', ''))
+
                 results.append(SearchResult(
-                    title=item.get('name', ''),
+                    title=title,
                     snippet=snippet,
                     url=item.get('url', ''),
                     source=item.get('siteName') or self._extract_domain(item.get('url', '')),
@@ -973,9 +1096,14 @@ class BraveSearchProvider(BaseSearchProvider):
                     except (ValueError, AttributeError):
                         published_date = age  # 解析失败时使用原始值
 
+                # 清理内容和标题
+                raw_desc = item.get('description', '')
+                snippet = clean_news_content(raw_desc)[:500] if raw_desc else ''
+                title = clean_news_title(item.get('title', ''))
+
                 results.append(SearchResult(
-                    title=item.get('title', ''),
-                    snippet=item.get('description', '')[:500],  # 截取到500字符
+                    title=title,
+                    snippet=snippet,
                     url=item.get('url', ''),
                     source=self._extract_domain(item.get('url', '')),
                     published_date=published_date
